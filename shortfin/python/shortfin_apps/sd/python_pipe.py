@@ -250,7 +250,6 @@ def create_service(
     params,
     device_idx=None,
     device_ids=[],
-    fibers_per_device=1,
     isolation="per_call",
     trace_execution=False,
     amdgpu_async_allocations=False,
@@ -265,7 +264,6 @@ def create_service(
         sysman=sysman,
         tokenizers=tokenizers,
         model_params=model_params,
-        fibers_per_device=fibers_per_device,
         workers_per_device=1,
         prog_isolation=isolation,
         show_progress=False,
@@ -440,12 +438,6 @@ def run_cli(argv):
     )
     parser.add_argument(
         "--workers_per_device",
-        type=int,
-        default=1,
-        help="Concurrency control -- how many fibers are created per device to run inference.",
-    )
-    parser.add_argument(
-        "--fibers_per_device",
         type=int,
         default=1,
         help="Concurrency control -- how many fibers are created per device to run inference.",

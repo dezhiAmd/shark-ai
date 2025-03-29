@@ -52,7 +52,6 @@ Please see --help for both the server and client for usage instructions. Here's 
 |--tokenizers |
 |--model_config |
 | --workers_per_device |
-| --fibers_per_device |
 | --isolation |	per_fiber, per_call, none |
 | --show_progress  |
 | --trace_execution |

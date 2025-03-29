@@ -138,7 +138,6 @@ def configure_service(args, sysman, model_config, flagfile, tuning_spec):
         sysman=sysman,
         tokenizers=tokenizers,
         model_params=model_params,
-        fibers_per_device=args.fibers_per_device,
         workers_per_device=args.workers_per_device,
         prog_isolation=args.isolation,
         show_progress=args.show_progress,
@@ -359,12 +358,6 @@ def main(argv, log_config=UVICORN_LOG_CONFIG):
     )
     parser.add_argument(
         "--workers_per_device",
-        type=int,
-        default=1,
-        help="Concurrency control -- how many fibers are created per device to run inference.",
-    )
-    parser.add_argument(
-        "--fibers_per_device",
         type=int,
         default=1,
         help="Concurrency control -- how many fibers are created per device to run inference.",

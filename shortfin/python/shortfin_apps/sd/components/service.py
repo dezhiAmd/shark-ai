@@ -40,7 +40,6 @@ class SDXLGenerateService(GenerateService):
         sysman: SDXLSystemManager,
         tokenizers: list[Tokenizer],
         model_params: ModelParams,
-        fibers_per_device: int,
         workers_per_device: int = 1,
         prog_isolation: str = "per_fiber",
         show_progress: bool = False,
@@ -48,7 +47,7 @@ class SDXLGenerateService(GenerateService):
         use_batcher: bool = True,
         splat: bool = False,
     ):
-        super().__init__(sysman, fibers_per_device, workers_per_device)
+        super().__init__(sysman, workers_per_device)
         self.name = name
         self.tokenizers = tokenizers
         self.model_params = model_params
@@ -77,15 +76,15 @@ class SDXLGenerateService(GenerateService):
             for i in range(self.workers_per_device):
                 worker = self.create_worker(device, i)
                 self.workers.append(worker)
-            for i in range(self.fibers_per_device):
-                worker_idx = idx * self.workers_per_device + i % self.workers_per_device
-                tgt_worker = self.workers[worker_idx]
-                raw_fiber = self.sysman.ls.create_fiber(tgt_worker, devices=[device])
-                meta_fiber = self.equip_fiber(
-                    raw_fiber, len(self.meta_fibers), worker_idx
-                )
-                self.meta_fibers.append(meta_fiber)
-                self.idle_meta_fibers.append(meta_fiber)
+            
+            worker_idx = idx * self.workers_per_device
+            tgt_worker = self.workers[worker_idx]
+            raw_fiber = self.sysman.ls.create_fiber(tgt_worker, devices=[device])
+            meta_fiber = self.equip_fiber(
+                raw_fiber, len(self.meta_fibers), worker_idx
+            )
+            self.meta_fibers.append(meta_fiber)
+            self.idle_meta_fibers.append(meta_fiber)
 
         # Initialize program and function containers
         for idx in range(len(self.workers)):
