@@ -267,7 +267,6 @@ class GenerateService:
     def __init__(
         self,
         sysman: SystemManager,
-        fibers_per_device: int = 1,
         workers_per_device: int = 1,
     ):
         """Initialize base service attributes."""
@@ -285,8 +284,6 @@ class GenerateService:
         # Worker and fiber configuration
         self.workers: list[sf.Worker] = []
         self.workers_per_device = workers_per_device
-        self.fibers_per_device = fibers_per_device
-        self.validate_fiber_configuration()
 
     def set_isolation(self, isolation_str: str = "per_call"):
         """Set the program isolation mode from a string.
@@ -295,14 +292,6 @@ class GenerateService:
             isolation_str: Program isolation mode string
         """
         self.prog_isolation = prog_isolations[isolation_str]
-
-    def validate_fiber_configuration(self):
-        """Validate fiber configuration."""
-        if self.fibers_per_device % self.workers_per_device != 0:
-            raise ValueError(
-                "Currently, fibers_per_device must be divisible by workers_per_device"
-            )
-        self.fibers_per_worker = int(self.fibers_per_device / self.workers_per_device)
 
     def load_inference_module(
         self, vmfb_path: Path, component: str = "main", batch_size: int = None
@@ -455,7 +444,6 @@ class GenerateService:
             f"\n  MODEL PARAMS : \n"
             f"{self.model_params}"
             f"\n  SERVICE PARAMS : \n"
-            f"     fibers per device : {self.fibers_per_device}\n"
             f"     program isolation mode : {self.prog_isolation}\n"
             f"\n  INFERENCE MODULES : \n"
             f"{new_line.join(modules)}\n"
