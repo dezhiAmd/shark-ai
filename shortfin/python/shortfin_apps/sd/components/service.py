@@ -157,7 +157,7 @@ class SDXLGenerateService(GenerateService):
 
                 for worker_idx, worker in enumerate(self.workers):
                     worker_devices = self.meta_fibers[
-                        worker_idx * (self.fibers_per_worker)
+                        worker_idx
                     ].fiber.raw_devices
                     logger.info(
                         f"Loading inference program: {component}, batch size {batch_size}, worker index: {worker_idx}, device: {worker_devices}"
