@@ -225,6 +225,7 @@ if(SHORTFIN_SYSTEMS_AMDGPU)
 endif()
 if (SHORTFIN_ENABLE_TRACING)
   set(IREE_ENABLE_RUNTIME_TRACING ON)
+  set(IREE_TRACING_PROVIDER console)
   # When using shared libraries there are some issues that need to be
   # explored more on static initialization order. Something is getting
   # initialized and is emitting tracy events before tracy objects are
