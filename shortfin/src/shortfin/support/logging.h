@@ -16,7 +16,7 @@
 #endif
 
 // Scheduler logging.
-#define SHORTFIN_SCHED_LOG_ENABLED 0
+#define SHORTFIN_SCHED_LOG_ENABLED 1
 #if SHORTFIN_SCHED_LOG_ENABLED
 #define SHORTFIN_SCHED_LOG(...) shortfin::logging::info("SCHED: " __VA_ARGS__)
 #else
