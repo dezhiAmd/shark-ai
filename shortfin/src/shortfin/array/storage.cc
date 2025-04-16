@@ -79,9 +79,9 @@ storage storage::allocate_device(ScopedDevice &device,
   printf(
       "storage::allocate_device(device=%x, affinity=%x):[%d, Wait@%d->"
       "Signal:@%d] -> buffer=%x\n",
-      reinterpret_cast<uintptr_t>(device.raw_device()->hal_device()),
-      device.affinity().queue_affinity(), reinterpret_cast<uintptr_t>(timeline_sem),
-      current_timepoint, signal_timepoint, reinterpret_cast<uintptr_t>(buffer.get()));
+      static_cast<unsigned int>(device.raw_device()->hal_device()),
+      device.affinity().queue_affinity(), static_cast<unsigned int>(timeline_sem),
+      current_timepoint, signal_timepoint, static_cast<unsigned int>(buffer.get()));
 
   // Device allocations are always async.
   TimelineResourceDestructor dtor =
