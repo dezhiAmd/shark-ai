@@ -312,14 +312,6 @@ def is_port_valid(port):
         return False
     return True
 
-def run_server(args, log_config=UVICORN_LOG_CONFIG):
-    uvicorn.run(
-        app,
-        host=args.host,
-        port=args.port,
-        log_config=log_config,
-        timeout_keep_alive=args.timeout_keep_alive,
-    )
 
 def main(argv, log_config=UVICORN_LOG_CONFIG):
     parser = argparse.ArgumentParser()
@@ -467,7 +459,14 @@ def main(argv, log_config=UVICORN_LOG_CONFIG):
     global sysman
     sysman, model_config, flagfile, tuning_spec = configure_sys(args)
     configure_service(args, sysman, model_config, flagfile, tuning_spec)
-    run_server(args, log_config)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_config=log_config,
+        timeout_keep_alive=args.timeout_keep_alive,
+    )
+
 
 if __name__ == "__main__":
     logging.root.setLevel(logging.INFO)
