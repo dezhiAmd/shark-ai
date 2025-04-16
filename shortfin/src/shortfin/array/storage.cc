@@ -71,6 +71,14 @@ storage storage::allocate_device(ScopedDevice &device,
       .payload_values = &signal_timepoint,
   };
   // Async allocate.
+
+    printf(
+      "Dezhi storage::allocate_device(device=%lu, affinity=%lu):[%lu, Wait@%lu->"
+      "Signal:@%lu]\n",
+      reinterpret_cast<uintptr_t>(device.raw_device()->hal_device()),
+      device.affinity().queue_affinity(), reinterpret_cast<uintptr_t>(timeline_sem),
+      current_timepoint, signal_timepoint);
+
   SHORTFIN_THROW_IF_ERROR(iree_hal_device_queue_alloca(
       device.raw_device()->hal_device(), device.affinity().queue_affinity(),
       wait_semaphore_list, signal_semaphore_list,
