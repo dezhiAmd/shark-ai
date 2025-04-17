@@ -14,7 +14,6 @@
 #include "shortfin/support/logging.h"
 
 namespace shortfin::local {
-
 // -------------------------------------------------------------------------- //
 // System
 // -------------------------------------------------------------------------- //
@@ -51,6 +50,7 @@ System::~System() {
   // Shutdown order is important so we don't leave it to field ordering.
   vm_instance_.reset();
 
+ SHORTFIN_SCHED_LOG("  : Dezhi clear retianed devices");
   // Devices.
   devices_.clear();
   named_devices_.clear();
@@ -66,6 +66,7 @@ System::~System() {
 void System::Shutdown() {
   SHORTFIN_TRACE_SCOPE_NAMED("System::Shutdown");
   // Stop workers.
+  SHORTFIN_SCHED_LOG("  : Dezhi system shutdown");
   std::vector<Worker *> local_workers;
   {
     iree::slim_mutex_lock_guard guard(lock_);
