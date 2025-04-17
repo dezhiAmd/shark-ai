@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "shortfin/local/device.h"
+#include "shortfin/support/logging.h"
 
 #include <fmt/core.h>
 #include <fmt/ranges.h>
@@ -64,7 +65,10 @@ Device::Device(DeviceAddress address, iree::hal_device_ptr hal_device,
   assert(hal_device_ && "nullptr iree_hal_device_t");
 }
 
-Device::~Device() = default;
+Device::~Device() {
+  SHORTFIN_SCHED_LOG("  : Dezhi Release device");
+  //iree_hal_device_release(hal_device());
+}
 
 std::string Device::to_s() const {
   return fmt::format(
