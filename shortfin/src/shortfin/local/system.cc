@@ -6,6 +6,7 @@
 
 #include "shortfin/local/system.h"
 
+#include <unistd.h>
 #include <fmt/core.h>
 #include <fmt/xchar.h>
 
@@ -65,6 +66,11 @@ System::~System() {
 
 void System::Shutdown() {
   SHORTFIN_TRACE_SCOPE_NAMED("System::Shutdown");
+  bool wait = true; //dezhi
+  while (wait) {
+    usleep(10000);
+  }
+
   // Stop workers.
   std::vector<Worker *> local_workers;
   {
