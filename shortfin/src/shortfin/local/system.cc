@@ -6,6 +6,8 @@
 
 #include "shortfin/local/system.h"
 
+
+#include <unistd.h>
 #include <fmt/core.h>
 #include <fmt/xchar.h>
 
@@ -67,6 +69,11 @@ void System::Shutdown() {
   SHORTFIN_TRACE_SCOPE_NAMED("System::Shutdown");
   // Stop workers.
   SHORTFIN_SCHED_LOG("  : Dezhi system shutdown");
+  bool wait = true; //dezhi
+  while (wait) {
+    usleep(10000);
+  }
+  
   std::vector<Worker *> local_workers;
   {
     iree::slim_mutex_lock_guard guard(lock_);
