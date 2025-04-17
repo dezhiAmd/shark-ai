@@ -323,6 +323,7 @@ class InferenceExecutorProcess(sf.Process):
     async def _prepare(self, device):
         # Tokenize prompts and negative prompts. We tokenize in bs1 for now and join later.
         # Tokenize the prompts if the request does not hold input_ids.
+        logger.info("dezhi _prepare start")
         batch_ids_lists = []
         cb = self.exec_request.command_buffer
         if isinstance(self.exec_request.prompt, str):
@@ -366,9 +367,11 @@ class InferenceExecutorProcess(sf.Process):
         sfnp.fill_randn(sample_host, generator=generator)
 
         cb.sample.copy_from(sample_host)
+        logger.info("dezhi _prepare end")
         return
 
     async def _encode(self, device):
+        logger.info("dezhi _encode start")
         req_bs = self.exec_request.batch_size
         entrypoints = self.service.inference_functions[self.worker_index]["encode"]
         assert req_bs in list(entrypoints.keys())
@@ -377,17 +380,19 @@ class InferenceExecutorProcess(sf.Process):
                 break
         cb = self.exec_request.command_buffer
         # Encode tokenized inputs.
-        logger.debug(
-            "INVOKE %r: %s",
+        logger.info(
+            "dezhi INVOKE %r: %s",
             fns["encode_prompts"],
             "".join([f"\n  {i}: {ary.shape}" for i, ary in enumerate(cb.input_ids)]),
         )
         cb.prompt_embeds, cb.text_embeds = await fns["encode_prompts"](
             *cb.input_ids, fiber=self.fiber
         )
+        logger.info("dezhi _encode stop")
         return
 
     async def _denoise(self, device):
+        logger.info("dezhi _denoise start")
         req_bs = self.exec_request.batch_size
         entrypoints = self.service.inference_functions[self.worker_index]["denoise"]
         assert req_bs in list(entrypoints.keys())
@@ -397,8 +402,8 @@ class InferenceExecutorProcess(sf.Process):
 
         cb = self.exec_request.command_buffer
 
-        logger.debug(
-            "INVOKE %r",
+        logger.info(
+            "dezhi INVOKE %r",
             fns["run_initialize"],
         )
         (cb.latents, cb.time_ids, cb.timesteps, cb.sigmas,) = await fns[
@@ -413,8 +418,8 @@ class InferenceExecutorProcess(sf.Process):
             start = time.time()
             step = cb.steps_arr.view(i)
             if self.service.model_params.use_scheduled_unet:
-                logger.debug(
-                    "INVOKE %r",
+                logger.info(
+                    "dezhi INVOKE %r",
                     fns["run_forward"],
                 )
                 (cb.latents,) = await fns["run_forward"](
@@ -429,15 +434,15 @@ class InferenceExecutorProcess(sf.Process):
                     fiber=self.fiber,
                 )
             else:
-                logger.debug(
-                    "INVOKE %r",
+                logger.info(
+                    "dezhi INVOKE %r",
                     fns["run_scale"],
                 )
                 (cb.latent_model_input, cb.t, cb.sigma, cb.next_sigma,) = await fns[
                     "run_scale"
                 ](cb.latents, step, cb.timesteps, cb.sigmas, fiber=self.fiber)
-                logger.debug(
-                    "INVOKE %r",
+                logger.info(
+                    "dezhi INVOKE %r",
                     fns["main"],
                 )
                 (cb.noise_pred,) = await fns["main"](
@@ -449,16 +454,18 @@ class InferenceExecutorProcess(sf.Process):
                     cb.guidance_scale,
                     fiber=self.fiber,
                 )
-                logger.debug(
-                    "INVOKE %r",
+                logger.info(
+                    "dezhi INVOKE %r",
                     fns["run_step"],
                 )
                 (cb.latents,) = await fns["run_step"](
                     cb.noise_pred, cb.latents, cb.sigma, cb.next_sigma, fiber=self.fiber
                 )
+        logger.info("dezhi _denoise end")
         return
 
     async def _decode(self, device):
+        logger.info("dezhi _decode start")
         req_bs = self.exec_request.batch_size
         prog_bs = req_bs
         cb = self.exec_request.command_buffer
@@ -473,8 +480,8 @@ class InferenceExecutorProcess(sf.Process):
         if req_bs != prog_bs:
             for i in range(req_bs):
                 # Decode the denoised latents.
-                logger.debug(
-                    "INVOKE %r: %s",
+                logger.info(
+                    "dezhi INVOKE %r: %s",
                     fns["decode"],
                     "".join([f"\n  0: {cb.latents.shape}"]),
                 )
@@ -482,8 +489,8 @@ class InferenceExecutorProcess(sf.Process):
                 (res,) = await fns["decode"](cb.latents.view(i), fiber=self.fiber)
                 cb.images.view(i).copy_from(res)
         else:
-            logger.debug(
-                "INVOKE %r: %s",
+            logger.info(
+                "dezhi INVOKE %r: %s",
                 fns["decode"],
                 "".join([f"\n  0: {cb.latents.shape}"]),
             )
@@ -507,15 +514,18 @@ class InferenceExecutorProcess(sf.Process):
             self.exec_request.height,
             self.exec_request.width,
         )
+        logger.info("dezhi _decode end")
         return
 
     async def _postprocess(self, device):
         # Process output images
         # TODO: reimpl with sfnp
+        logger.info("dezhi _postprocess start")
         permuted = np.transpose(self.exec_request.image_array, (0, 2, 3, 1))[0]
         cast_image = (permuted * 255).round().astype("uint8")
         processed_image = Image.fromarray(cast_image)
         self.exec_request.response_image = processed_image
+        logger.info("dezhi _postprocess end")
         return
 
 
