@@ -420,10 +420,25 @@ def rms_norm_Tensor_QuantizedTensor(
     return rms_norm_default(x, weight, epsilon=epsilon)
 
 
+@pad.override(Tensor)
+def pad_default(
+    input: Union[Tensor, PrimitiveTensor],
+    _pad: Sequence[int],
+    mode: str = None,
+    value: Optional[float] = None,
+) -> Tensor:
+    return F.pad(unbox_tensor(input), _pad, mode=mode, value=value)
+
+
 @permute.override(Tensor)
 def permute(tensor: Tensor, dims: List[int]):
     torch_tensor = unbox_tensor(tensor)
     return torch.permute(torch_tensor, dims)
+
+
+@sigmoid.override(Tensor)
+def sigmoid_default(tensor: Tensor) -> Tensor:
+    return tensor.sigmoid()
 
 
 @softmax.override(Tensor)
@@ -501,9 +516,14 @@ def squeeze_default(tensor, dim: Optional[int] = None) -> AnyTensor:
         return torch.squeeze(unbox_tensor(tensor), dim)
 
 
-@topk.override(AllOfType(AnyTensor, PrimitiveTensor))
-def topk_default(tensor, k: int, dim: int) -> AnyTensor:
-    return torch.topk(tensor, k=k, dim=dim)
+@topk.override(AllOfType(Tensor, PrimitiveTensor))
+def topk_default(
+    tensor, k: int, dim: int, largest: bool, sorted: bool
+) -> tuple[Tensor, Tensor]:
+    result = torch.topk(
+        unbox_tensor(tensor), k=k, dim=dim, largest=largest, sorted=sorted
+    )
+    return result.values, result.indices
 
 
 @view.override(Tensor)
