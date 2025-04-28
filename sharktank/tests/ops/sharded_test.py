@@ -5,7 +5,8 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import unittest
-from parameterized import parameterized
+import itertools
+from parameterized import parameterized, parameterized_class
 
 import torch
 
@@ -249,20 +250,34 @@ class ElementwiseTest(unittest.TestCase):
 
         torch.testing.assert_close(actual_result, expected_result)
 
-    def testRhsAndLhsShardedAddWithBroadcasting(self):
-        a = torch.rand(1, 4, 5, 6, dtype=torch.float32)
-        b = torch.rand(3, 4, 1, 6, dtype=torch.float32)
+    @parameterized.expand(tuple(itertools.product([0, 1, 2, 3], repeat=2)))
+    def testRhsAndLhsShardedAddWithBroadcasting(self, i: int, j: int):
+        a = torch.rand((1, 4, 5, 6)[i:], dtype=torch.float32)
+        b = torch.rand((3, 4, 1, 6)[j:], dtype=torch.float32)
 
         expected_result = a + b
 
-        shard_dim = 3
         shard_count = 3
-        sharded_a = ops.reshard_split(a, dim=shard_dim, count=shard_count)
-        sharded_b = ops.reshard_split(b, dim=shard_dim, count=shard_count)
+        sharded_a = ops.reshard_split(a, dim=a.dim() - 1, count=shard_count)
+        sharded_b = ops.reshard_split(b, dim=b.dim() - 1, count=shard_count)
         sharded_result = sharded_a + sharded_b
         actual_result = ops.reshard_like(sharded_result, expected_result)
 
         torch.testing.assert_close(actual_result, expected_result)
+
+    @parameterized.expand(tuple(itertools.product([0, 1, 2], repeat=2)))
+    def testShardedReplicatedAddWithBroadcasting(self, i: int, j: int):
+        a = torch.rand((4, 1, 6)[i:], dtype=torch.float32)
+        b = torch.rand((4, 5, 6)[j:], dtype=torch.float32)
+
+        expected_result = a + b
+
+        a_s = ops.replicate(a, count=3)
+        b_s = ops.reshard_split(b, dim=b.dim() - 1, count=3)
+        actual_result = a_s + b_s
+        actual_result2 = b_s + a_s
+        torch.testing.assert_close(expected_result, ops.unbox_tensor(actual_result))
+        torch.testing.assert_close(expected_result, ops.unbox_tensor(actual_result2))
 
     @parameterized.expand(
         [
@@ -270,7 +285,8 @@ class ElementwiseTest(unittest.TestCase):
             (torch.div,),
             (torch.fmin,),
             (torch.fmax,),
-            (torch.sub),
+            (torch.sub,),
+            (torch.mul,),
         ]
     )
     def testBinaryOperators(self, operator):
@@ -885,6 +901,67 @@ class MatmulTest(unittest.TestCase):
         actual_result = ops.matmul(a_sharded, b_sharded)
         for shard in actual_result.shards:
             assert ops.equal(shard, unsharded_result)
+
+
+@parameterized_class(
+    ("keepdim", "mean_dim_delta"), list(itertools.product([True, False], [-1, 0, +1]))
+)
+class MeanTest(unittest.TestCase):
+    def setUp(self):
+        self.shape = (2, 4, 6, 8, 10)
+        self.shard_dim = 2
+        self.mean_dim = self.shard_dim + self.mean_dim_delta
+        self.mean_dims_multi = tuple(self.mean_dim + i for i in [-1, 0, +1])
+        self.shard_count = 2
+        torch.random.manual_seed(sum(self.mean_dims_multi) + 13 * self.keepdim)
+
+    def testMeanReplicated(self):
+        tensor = torch.rand(self.shape, dtype=torch.float32)
+        expected_result = ops.mean(tensor, dim=self.mean_dim, keepdim=self.keepdim)
+        actual_result = ops.mean(
+            ops.replicate(tensor, count=self.shard_count),
+            dim=self.mean_dim,
+            keepdim=self.keepdim,
+        )
+        torch.testing.assert_close(expected_result, ops.unbox_tensor(actual_result))
+
+    def testMeanSplit(self):
+        tensor = torch.rand(self.shape, dtype=torch.float32)
+        expected_result = ops.mean(tensor, dim=self.mean_dim, keepdim=self.keepdim)
+        sharded_tensor = ops.reshard_split(
+            tensor, dim=self.shard_dim, count=self.shard_count
+        )
+        actual_result = ops.mean(
+            sharded_tensor, dim=self.mean_dim, keepdim=self.keepdim
+        )
+        torch.testing.assert_close(expected_result, ops.unbox_tensor(actual_result))
+
+    def testMeanSplitNegativeDims(self):
+        if self.mean_dim_delta != -1:
+            self.skipTest(
+                "Using a specifc negative dim, so only running for different versions of 'keepdim'."
+            )
+        mean_dim = [-5, -1, -4]
+        tensor = torch.rand(self.shape, dtype=torch.float32)
+        expected_result = ops.mean(tensor, dim=mean_dim, keepdim=self.keepdim)
+        sharded_tensor = ops.reshard_split(
+            tensor, dim=self.shard_dim, count=self.shard_count
+        )
+        actual_result = ops.mean(sharded_tensor, dim=mean_dim, keepdim=self.keepdim)
+        torch.testing.assert_close(expected_result, ops.unbox_tensor(actual_result))
+
+    def testMeanSplitMultiDim(self):
+        tensor = torch.rand(self.shape, dtype=torch.float32)
+        expected_result = ops.mean(
+            tensor, dim=self.mean_dims_multi, keepdim=self.keepdim
+        )
+        sharded_tensor = ops.reshard_split(
+            tensor, dim=self.shard_dim, count=self.shard_count
+        )
+        actual_result = ops.mean(
+            sharded_tensor, dim=self.mean_dims_multi, keepdim=self.keepdim
+        )
+        torch.testing.assert_close(expected_result, ops.unbox_tensor(actual_result))
 
 
 class ReplicateTest(unittest.TestCase):

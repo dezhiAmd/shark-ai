@@ -420,7 +420,7 @@ def split_elementwise_binary(
         operator(pt_x, pt_y, *args, **kwargs) for pt_x, pt_y in zip(pt_xs, pt_ys)
     ]
     return SplitPrimitiveTensor(
-        shard_dim=x.shard_dim,
+        shard_dim=x_shard_dim,
         shape=torch.broadcast_shapes(x.shape, y.shape),
         ts=partials,
     )
@@ -1051,9 +1051,47 @@ def mean_replicated(
     keepdim: bool,
     *,
     dtype: torch.dtype,
-) -> None:
+) -> ReplicatedTensor:
     shards = [mean(shard, dim=dim, keepdim=keepdim, dtype=dtype) for shard in x.shards]
     return ReplicatedTensor(ts=shards)
+
+
+@mean.override(SplitPrimitiveTensor)
+def mean_split(
+    x: SplitPrimitiveTensor,
+    dim: Union[int, List[int]],
+    keepdim: bool,
+    *,
+    dtype: torch.dtype,
+) -> SplitPrimitiveTensor | ReplicatedTensor:
+    if not isinstance(dim, (list, tuple)):
+        dim = [dim]
+    dim = [d + len(x.shape) if d < 0 else d for d in dim]
+
+    if x.shard_dim not in dim:
+        # If keepdim == False and any entry in dim is smaller than shard_dim
+        # we need to offset shard_dim_new to have it point to the same dimension.
+        num_smaller_dims = sum(d < x.shard_dim for d in dim)
+        shard_dim_new = x.shard_dim - (not keepdim) * num_smaller_dims
+
+        shards = [
+            mean(shard, dim=dim, keepdim=keepdim, dtype=dtype) for shard in x.shards
+        ]
+        return SplitPrimitiveTensor(ts=shards, shard_dim=shard_dim_new)
+    else:
+        gathered = cat(
+            [
+                (
+                    transfer_to_logical_device(shard, x.devices[0])
+                    if i != 0
+                    else barrier_on_logical_device(shard, x.devices[0])
+                )
+                for i, shard in enumerate(x.shards)
+            ],
+            dim=x.shard_dim,
+        )
+        meaned = mean(gathered, dim=dim, keepdim=keepdim, dtype=dtype)
+        return ReplicatedTensor(ts=meaned, shard_count=x.shard_count, devices=x.devices)
 
 
 @module_register_buffer.override(torch.nn.Module, ShardedTensor)
@@ -1275,7 +1313,23 @@ def reshard_like_replicated_to_replicated(
 def reshard_like_replicated_to_split(
     tensor: ReplicatedTensor, like: SplitPrimitiveTensor
 ) -> SplitPrimitiveTensor:
-    return reshard_split(tensor, dim=like.shard_dim, count=like.shard_count)
+    """
+    Adjust to handle broadcasting.
+    If `like` has more dims than `tensor`, we meed to decrease dim by the difference.
+    If it has more dims we need to increase dim instead.
+    Conceptually we are right aligning the dims.
+      like.shape     == [1, 2, 3]
+      tensor.shape   == [2, 3]
+    Becomes:
+      like.shape     == [1, 2, 3]
+      tensor.shape   == [   2, 3]
+    """
+    dim = (
+        like.shard_dim
+        - max(0, len(like.shape) - len(tensor.shape))
+        + max(0, len(tensor.shape) - len(like.shape))
+    )
+    return reshard_split(tensor, dim=dim, count=like.shard_count)
 
 
 @reshard_like.override(SplitPrimitiveTensor, SplitPrimitiveTensor)
