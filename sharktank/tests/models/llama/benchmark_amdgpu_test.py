@@ -313,11 +313,6 @@ class BenchmarkLlama3_1_8B(BaseBenchmarkTest):
         )
 
     @is_nightly
-    @pytest.mark.xfail(
-        run=False,
-        reason="https://github.com/iree-org/iree/issues/20528",
-        raises=IreeCompileException,
-    )
     def testBenchmark8B_fp8_TP1_Non_Decomposed(self):
         output_file_name = self.dir_path_8b / "fp8_torch_tp1"
         output_mlir = self.llama8b_fp8_torch_sdpa_artifacts.create_file(
@@ -378,12 +373,12 @@ class BenchmarkLlama3_1_8B(BaseBenchmarkTest):
             suffix=".txt", prefix=output_file_name
         )
         export_return_code = self.llama8b_fp8_attnf8_sdpa_artifacts.export_to_mlir(
-            mlir_path=output_mlir,
-            json_path=output_json,
+            output_mlir=output_mlir,
+            output_config=output_json,
         )
         self.llama8b_fp8_attnf8_sdpa_artifacts.compile_to_vmfb(
-            mlir_path=str(output_mlir),
-            vmfb_path=output_vmfb,
+            output_mlir=str(output_mlir),
+            output_vmfb=output_vmfb,
             hal_dump_path=output_file_name,
             cwd=self.repo_root,
             args=self.compile_args,
@@ -423,12 +418,12 @@ class BenchmarkLlama3_1_8B(BaseBenchmarkTest):
             suffix=".txt", prefix=output_file_name
         )
         export_return_code = self.llama8b_fp8_attnf8_sdpa_artifacts.export_to_mlir(
-            mlir_path=output_mlir,
-            json_path=output_json,
+            output_mlir=output_mlir,
+            output_config=output_json,
         )
         self.llama8b_fp8_attnf8_sdpa_artifacts.compile_to_vmfb(
-            mlir_path=str(output_mlir),
-            vmfb_path=output_vmfb,
+            output_mlir=str(output_mlir),
+            output_vmfb=output_vmfb,
             hal_dump_path=output_file_name,
             cwd=self.repo_root,
             args=self.compile_args,
@@ -666,7 +661,9 @@ class BenchmarkLlama3_1_70B(BaseBenchmarkTest):
         )
 
     @pytest.mark.xfail(
-        reason="Benchmarking Error", strict=True, raises=IreeBenchmarkException
+        run=False,
+        reason="https://github.com/iree-org/iree/issues/20581",
+        raises=IreeCompileException,
     )
     def testBenchmark70B_f16_TP8_Non_Decomposed_Input_Len_128(self):
         output_file_name = self.dir_path_70b / "f16_torch_128_tp8"
@@ -716,7 +713,9 @@ class BenchmarkLlama3_1_70B(BaseBenchmarkTest):
         )
 
     @pytest.mark.xfail(
-        reason="Benchmarking Error", strict=True, raises=IreeBenchmarkException
+        run=False,
+        reason="https://github.com/iree-org/iree/issues/20581",
+        raises=IreeCompileException,
     )
     def testBenchmark70B_f16_TP8_Non_Decomposed_Input_Len_2048(self):
         output_file_name = self.dir_path_70b / "f16_torch_2048_tp8"
