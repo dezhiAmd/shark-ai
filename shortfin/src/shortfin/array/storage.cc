@@ -54,7 +54,7 @@ storage storage::allocate_device(ScopedDevice &device,
       .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
       .access = IREE_HAL_MEMORY_ACCESS_ALL,
       .type = IREE_HAL_MEMORY_TYPE_OPTIMAL_FOR_DEVICE,
-      .queue_affinity = device.affinity().queue_affinity(),
+      .queue_affinity = 1,
   };
   Account &account = device.fiber().scheduler().GetDefaultAccount(device);
   iree_hal_semaphore_t *timeline_sem = account.timeline_sem();
@@ -72,7 +72,7 @@ storage storage::allocate_device(ScopedDevice &device,
   };
   // Async allocate.
   SHORTFIN_THROW_IF_ERROR(iree_hal_device_queue_alloca(
-      device.raw_device()->hal_device(), device.affinity().queue_affinity(),
+      device.raw_device()->hal_device(), params.queue_affinity,
       wait_semaphore_list, signal_semaphore_list,
       IREE_HAL_ALLOCATOR_POOL_DEFAULT, params, allocation_size,
       IREE_HAL_ALLOCA_FLAG_NONE, buffer.for_output()));
@@ -80,7 +80,7 @@ storage storage::allocate_device(ScopedDevice &device,
       "storage::allocate_device(device={}, affinity={:x}):[{}, Wait@{}->"
       "Signal:@{}] -> buffer={}",
       static_cast<void *>(device.raw_device()->hal_device()),
-      device.affinity().queue_affinity(), static_cast<void *>(timeline_sem),
+      params.queue_affinity, static_cast<void *>(timeline_sem),
       current_timepoint, signal_timepoint, static_cast<void *>(buffer.get()));
 
   // Device allocations are always async.
@@ -105,13 +105,11 @@ storage storage::allocate_host(ScopedDevice &device,
       .usage = IREE_HAL_BUFFER_USAGE_MAPPING,
       .access = IREE_HAL_MEMORY_ACCESS_ALL,
       .type = IREE_HAL_MEMORY_TYPE_OPTIMAL_FOR_HOST,
-      .queue_affinity = device.affinity().queue_affinity(),
+      .queue_affinity = 1,
   };
   if (device_visible) {
     params.type |= IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE;
-    if (device.affinity().queue_affinity() != 0) {
-      params.usage |= IREE_HAL_BUFFER_USAGE_TRANSFER;
-    }
+    params.usage |= IREE_HAL_BUFFER_USAGE_TRANSFER;
   }
   SHORTFIN_THROW_IF_ERROR(iree_hal_allocator_allocate_buffer(
       allocator, params, allocation_size, buffer.for_output()));
