@@ -118,7 +118,7 @@ TimelineResourceDestructor TimelineResource::CreateAsyncBufferDestructor(
           buffer = std::move(buffer)](TimelineResource &res) {
     ScopedDevice scoped_device(*res.fiber(), device_affinity);
     iree_hal_device_t *hal_device = scoped_device.raw_device()->hal_device();
-    auto queue_affinity = scoped_device.affinity().queue_affinity();
+    auto queue_affinity = 1;
     SHORTFIN_TRACE_SCOPE_NAMED("TimelineResource::AsyncBufferDestructor");
 
     // The dealloca needs to wait on the current timepoint+all uses, and it
@@ -219,7 +219,7 @@ void Scheduler::AppendCommandBuffer(ScopedDevice &device,
                                     std::function<void(Account &)> callback) {
   SHORTFIN_TRACE_SCOPE_NAMED("Scheduler::AppendCommandBuffer");
   Account &account = GetDefaultAccount(device);
-  auto needed_affinity_bits = device.affinity().queue_affinity();
+  auto needed_affinity_bits = 1;
   SHORTFIN_SCHED_LOG(
       "AppendCommandBuffer(account=0x{:x}, tx_type={}, queue_affinity={}):",
       account.id(), static_cast<int>(tx_type), needed_affinity_bits);
@@ -312,7 +312,7 @@ iree_status_t Scheduler::FlushWithStatus() noexcept {
     SHORTFIN_SCHED_LOG(
         "Flush command buffer (account=0x{:x}, queue_affinity={}, "
         "signal_timepoint={}, deps={})",
-        account.id(), account.active_queue_affinity_bits_, signal_timepoint,
+        account.id(), 1, signal_timepoint,
         SummarizeFence(account.active_deps_));
 
     // End recording and submit.
