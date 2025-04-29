@@ -319,7 +319,7 @@ iree_status_t Scheduler::FlushWithStatus() noexcept {
     IREE_RETURN_IF_ERROR(iree_hal_command_buffer_end(active_command_buffer));
     IREE_RETURN_IF_ERROR(iree_hal_device_queue_execute(
         account.hal_device(),
-        /*queue_affinity=*/account.active_queue_affinity_bits_,
+        /*queue_affinity=*/1,
         /*wait_sempahore_list=*/account.active_deps_
             ? iree_hal_fence_semaphore_list(account.active_deps_)
             : iree_hal_semaphore_list_empty(),
