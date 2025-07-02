@@ -115,12 +115,14 @@ class PagePool:
     def acquire_free_pages(self, count: int) -> list[PageInfo] | None:
         with self._lock:
             available = len(self.available_pages)
+            print("acquire_free_pages: count=", count)
             if count > available:
                 return None
             return [self.available_pages.pop() for _ in range(count)]
 
     def free_pages(self, pages: list[PageInfo]):
         with self._lock:
+            print("free_pages: count=", len(pages))
             self.available_pages.extend(pages)
 
     def copy_page(self, src_page: PageInfo) -> PageInfo:
