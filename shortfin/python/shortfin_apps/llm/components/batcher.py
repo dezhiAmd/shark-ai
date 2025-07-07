@@ -183,8 +183,7 @@ class PrefillBatcherProcess(LlmBatcherProcess):
 
     def submit(self, request):
         """Submit a request to the batcher."""
-        print("prefill submit request length: ", len(request.input_token_ids))
-        self.batcher_infeed.write_nodelay(request)
+        super().submit(request)
 
     def make_process(self, cache: BasePagedAttentionCache, fiber: Fiber):
         return PrefillExecutorProcess(
@@ -243,9 +242,7 @@ class DecodeBatcherProcess(LlmBatcherProcess):
         )
 
     def submit(self, request):
-        """Submit a request to the batcher."""
-        print("Decode submit request length: ", len(request.input_token_ids))
-        self.batcher_infeed.write_nodelay(request)
+        super().submit(request)
 
     def make_process(self, cache: BasePagedAttentionCache, fiber: Fiber):
         return DecodeExecutorProcess(
