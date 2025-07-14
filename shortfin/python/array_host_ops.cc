@@ -23,13 +23,22 @@
 #include <limits>
 #include <type_traits>
 
+template <bool isFnuzTy>
 struct float8_t {
+  // TODO (vinayakdsci): Here it is assumed that we ever encounter only two
+  // fp8 types: e4m3fnuz and e4m3fn, to increase development speed. However,
+  // this is not going to be the case in a more realistic scenario. Therefore,
+  // this approach needs a re-review before being merged into main.
   uint8_t value;
 
-  float8_t() noexcept : value(0) {}
+  constexpr float8_t() noexcept : value(0) {}
 
   explicit float8_t(float f) noexcept {
-    value = iree_math_f32_to_f8e4m3fnuz(f);
+    if constexpr (isFnuzTy) {
+      value = iree_math_f32_to_f8e4m3fnuz(f);
+    } else {
+      value = iree_math_f32_to_f8e4m3fn(f);
+    }
   }
 
   template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T> &&
@@ -37,58 +46,63 @@ struct float8_t {
   float8_t(T value) noexcept : float8_t(static_cast<float>(value)) {}
 
   operator float() const noexcept {
-    // uint8_t temp = static_cast<uint8_t>(value);
-    return iree_math_f8e4m3fnuz_to_f32(value);
+    float retval;
+    if constexpr (isFnuzTy) {
+      retval = iree_math_f8e4m3fnuz_to_f32(value);
+    } else {
+      retval = iree_math_f8e4m3fn_to_f32(value);
+    }
+    return retval;
   }
 
   // Arithmetic operators (implemented via conversion to float)
-  float8_t operator+(const float8_t &other) const noexcept {
-    return float8_t(float(*this) + float(other));
+  float8_t<isFnuzTy> operator+(const float8_t<isFnuzTy> &other) const noexcept {
+    return float8_t<isFnuzTy>(float(*this) + float(other));
   }
-  float8_t operator-(const float8_t &other) const noexcept {
-    return float8_t(float(*this) - float(other));
+  float8_t<isFnuzTy> operator-(const float8_t<isFnuzTy> &other) const noexcept {
+    return float8_t<isFnuzTy>(float(*this) - float(other));
   }
-  float8_t operator*(const float8_t &other) const noexcept {
-    return float8_t(float(*this) * float(other));
+  float8_t<isFnuzTy> operator*(const float8_t<isFnuzTy> &other) const noexcept {
+    return float8_t<isFnuzTy>(float(*this) * float(other));
   }
-  float8_t operator/(const float8_t &other) const noexcept {
-    return float8_t(float(*this) / float(other));
+  float8_t<isFnuzTy> operator/(const float8_t<isFnuzTy> &other) const noexcept {
+    return float8_t<isFnuzTy>(float(*this) / float(other));
   }
 
-  float8_t &operator+=(const float8_t &other) noexcept {
+  float8_t<isFnuzTy> &operator+=(const float8_t<isFnuzTy> &other) noexcept {
     *this = *this + other;
     return *this;
   }
-  float8_t &operator-=(const float8_t &other) noexcept {
+  float8_t<isFnuzTy> &operator-=(const float8_t<isFnuzTy> &other) noexcept {
     *this = *this - other;
     return *this;
   }
-  float8_t &operator*=(const float8_t &other) noexcept {
+  float8_t<isFnuzTy> &operator*=(const float8_t<isFnuzTy> &other) noexcept {
     *this = *this * other;
     return *this;
   }
-  float8_t &operator/=(const float8_t &other) noexcept {
+  float8_t<isFnuzTy> &operator/=(const float8_t<isFnuzTy> &other) noexcept {
     *this = *this / other;
     return *this;
   }
 
   // Comparison operators (using conversion to float)
-  bool operator==(const float8_t &other) const noexcept {
+  bool operator==(const float8_t<isFnuzTy> &other) const noexcept {
     return float(*this) == float(other);
   }
-  bool operator!=(const float8_t &other) const noexcept {
+  bool operator!=(const float8_t<isFnuzTy> &other) const noexcept {
     return !(*this == other);
   }
-  bool operator<(const float8_t &other) const noexcept {
+  bool operator<(const float8_t<isFnuzTy> &other) const noexcept {
     return float(*this) < float(other);
   }
-  bool operator<=(const float8_t &other) const noexcept {
+  bool operator<=(const float8_t<isFnuzTy> &other) const noexcept {
     return float(*this) <= float(other);
   }
-  bool operator>(const float8_t &other) const noexcept {
+  bool operator>(const float8_t<isFnuzTy> &other) const noexcept {
     return float(*this) > float(other);
   }
-  bool operator>=(const float8_t &other) const noexcept {
+  bool operator>=(const float8_t<isFnuzTy> &other) const noexcept {
     return float(*this) >= float(other);
   }
 };
@@ -97,28 +111,38 @@ struct float8_t {
 // it.
 namespace std {
 template <>
-struct is_trivial<float8_t> : std::true_type {};
+struct is_trivial<float8_t<false>> : std::true_type {};
 template <>
-struct is_standard_layout<float8_t> : std::true_type {};
+struct is_standard_layout<float8_t<false>> : std::true_type {};
 template <>
-struct is_trivially_copyable<float8_t> : std::true_type {};
+struct is_trivially_copyable<float8_t<false>> : std::true_type {};
+template <>
+struct is_trivial<float8_t<true>> : std::true_type {};
+template <>
+struct is_standard_layout<float8_t<true>> : std::true_type {};
+template <>
+struct is_trivially_copyable<float8_t<true>> : std::true_type {};
 }  // namespace std
 
 // Math functions needed by xtensor for float8_t
-inline float8_t round(float8_t x) noexcept {
-  return float8_t(std::round(float(x)));
+template <bool isFnuzTy>
+inline float8_t<isFnuzTy> round(float8_t<isFnuzTy> x) noexcept {
+  return float8_t<isFnuzTy>(std::round(float(x)));
 }
 
-inline float8_t ceil(float8_t x) noexcept {
-  return float8_t(std::ceil(float(x)));
+template <bool isFnuzTy>
+inline float8_t<isFnuzTy> ceil(float8_t<isFnuzTy> x) noexcept {
+  return float8_t<isFnuzTy>(std::ceil(float(x)));
 }
 
-inline float8_t floor(float8_t x) noexcept {
-  return float8_t(std::floor(float(x)));
+template <bool isFnuzTy>
+inline float8_t<isFnuzTy> floor(float8_t<isFnuzTy> x) noexcept {
+  return float8_t<isFnuzTy>(std::floor(float(x)));
 }
 
-inline float8_t trunc(float8_t x) noexcept {
-  return float8_t(std::trunc(float(x)));
+template <bool isFnuzTy>
+inline float8_t<isFnuzTy> trunc(float8_t<isFnuzTy> x) noexcept {
+  return float8_t<isFnuzTy>(std::trunc(float(x)));
 }
 
 #endif
@@ -507,7 +531,8 @@ struct ConvertFunctor {
   }
       switch (dtype) {
         SF_STORE_CASE(float16, half_float::half);
-        SF_STORE_CASE(float8_e4m3fnuz, float8_t);
+        SF_STORE_CASE(float8_e4m3fnuz, float8_t<true>);
+        SF_STORE_CASE(float8_e4m3fn, float8_t<false>);
         SF_STORE_CASE(bfloat16, bfloat16_t);
         SF_STORE_CASE(float32, float);
         SF_STORE_CASE(float64, double);
@@ -527,7 +552,8 @@ struct ConvertFunctor {
     };
 
     switch (input.dtype()) {
-      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t);
+      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t<true>);
+      SF_UNARY_THUNK_CASE(float8_e4m3fn, float8_t<false>);
       SF_UNARY_THUNK_CASE(float16, half_float::half);
       SF_UNARY_THUNK_CASE(bfloat16, bfloat16_t);
       SF_UNARY_THUNK_CASE(float32, float);
@@ -583,7 +609,8 @@ struct ConvertRoundFunctor {
     };
 
     switch (input.dtype()) {
-      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t);
+      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t<true>);
+      SF_UNARY_THUNK_CASE(float8_e4m3fn, float8_t<false>);
       SF_UNARY_THUNK_CASE(float16, half_float::half);
       SF_UNARY_THUNK_CASE(bfloat16, bfloat16_t);
       SF_UNARY_THUNK_CASE(float32, float);
@@ -629,7 +656,8 @@ struct ConvertCeilFunctor {
     };
 
     switch (input.dtype()) {
-      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t);
+      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t<true>);
+      SF_UNARY_THUNK_CASE(float8_e4m3fn, float8_t<false>);
       SF_UNARY_THUNK_CASE(float16, half_float::half);
       SF_UNARY_THUNK_CASE(bfloat16, bfloat16_t);
       SF_UNARY_THUNK_CASE(float32, float);
@@ -675,7 +703,8 @@ struct ConvertFloorFunctor {
     };
 
     switch (input.dtype()) {
-      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t);
+      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t<true>);
+      SF_UNARY_THUNK_CASE(float8_e4m3fn, float8_t<false>);
       SF_UNARY_THUNK_CASE(float16, half_float::half);
       SF_UNARY_THUNK_CASE(bfloat16, bfloat16_t);
       SF_UNARY_THUNK_CASE(float32, float);
@@ -721,7 +750,8 @@ struct ConvertTruncFunctor {
     };
 
     switch (input.dtype()) {
-      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t);
+      SF_UNARY_THUNK_CASE(float8_e4m3fnuz, float8_t<true>);
+      SF_UNARY_THUNK_CASE(float8_e4m3fn, float8_t<false>);
       SF_UNARY_THUNK_CASE(float16, half_float::half);
       SF_UNARY_THUNK_CASE(bfloat16, bfloat16_t);
       SF_UNARY_THUNK_CASE(float32, float);
@@ -858,8 +888,12 @@ bfloat16_t ConvertPyToEltTy(py::handle py_value, bfloat16_t zero) {
   return static_cast<bfloat16_t>(py::cast<double>(py_value));
 }
 
-float8_t ConvertPyToEltTy(py::handle py_value, float8_t zero) {
-  return static_cast<float8_t>(py::cast<float>(py_value));
+float8_t<false> ConvertPyToEltTy(py::handle py_value, float8_t<false> zero) {
+  return static_cast<float8_t<false>>(py::cast<float>(py_value));
+}
+
+float8_t<true> ConvertPyToEltTy(py::handle py_value, float8_t<true> zero) {
+  return static_cast<float8_t<true>>(py::cast<float>(py_value));
 }
 
 struct AddFunctor {
@@ -946,7 +980,8 @@ device_array ElementwiseOperation(py::handle lhs, py::handle rhs,
   };
 
   switch (dtype) {
-    SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t);
+    SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t<true>);
+    SF_UNARY_FUNCTION_CASE(float8_e4m3fn, float8_t<false>);
     SF_UNARY_FUNCTION_CASE(float16, half_float::half);
     SF_UNARY_FUNCTION_CASE(bfloat16, bfloat16_t);
     SF_UNARY_FUNCTION_CASE(float32, float);
@@ -999,7 +1034,8 @@ void BindArrayHostOps(py::module_ &m) {
           return *out;
         };
         switch (input.dtype()) {
-          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t<true>);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fn, float8_t<false>);
           SF_UNARY_FUNCTION_CASE(float16, half_float::half);
           SF_UNARY_FUNCTION_CASE(bfloat16, bfloat16_t);
           SF_UNARY_FUNCTION_CASE(float32, float);
@@ -1047,7 +1083,8 @@ void BindArrayHostOps(py::module_ &m) {
         };
 
         switch (input.dtype()) {
-          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t<true>);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fn, float8_t<false>);
           SF_UNARY_FUNCTION_CASE(float16, half_float::half);
           SF_UNARY_FUNCTION_CASE(bfloat16, bfloat16_t);
           SF_UNARY_FUNCTION_CASE(float32, float);
@@ -1087,7 +1124,8 @@ void BindArrayHostOps(py::module_ &m) {
         };
 
         switch (input.dtype()) {
-          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t<true>);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fn, float8_t<false>);
           SF_UNARY_FUNCTION_CASE(float16, half_float::half);
           SF_UNARY_FUNCTION_CASE(bfloat16, bfloat16_t);
           SF_UNARY_FUNCTION_CASE(float32, float);
@@ -1126,7 +1164,8 @@ void BindArrayHostOps(py::module_ &m) {
         };
 
         switch (input.dtype()) {
-          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t<true>);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fn, float8_t<false>);
           SF_UNARY_FUNCTION_CASE(float16, half_float::half);
           SF_UNARY_FUNCTION_CASE(bfloat16, bfloat16_t);
           SF_UNARY_FUNCTION_CASE(float32, float);
@@ -1262,7 +1301,8 @@ void BindArrayHostOps(py::module_ &m) {
         };
 
         switch (out.dtype()) {
-          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fnuz, float8_t<true>);
+          SF_UNARY_FUNCTION_CASE(float8_e4m3fn, float8_t<false>);
           SF_UNARY_FUNCTION_CASE(float16, half_float::half);
           SF_UNARY_FUNCTION_CASE(bfloat16, bfloat16_t);
           SF_UNARY_FUNCTION_CASE(float32, float);
