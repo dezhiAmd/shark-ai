@@ -118,25 +118,6 @@ class LlmGenerateService(GenerateService):
         )
         self.initialize_function_references()
 
-        self.prefill_batcher = PrefillBatcherProcess(
-            self.prefill_fiber,
-            self.page_cache,
-            self.model_params,
-            self.prefill_functions,
-            self.prog_isolation,
-        )
-
-        self.decode_batcher = DecodeBatcherProcess(
-            self.decode_fiber,
-            self.page_cache,
-            self.model_params,
-            self.decode_functions,
-            self.prog_isolation,
-        )
-
-        self.prefill_batcher.launch()
-        self.decode_batcher.launch()
-
     def initialize_function_references(self):
         self.prefill_functions = {}
         for bs in self.model_params.prefill_batch_sizes:

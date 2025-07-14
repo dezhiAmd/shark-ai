@@ -78,6 +78,9 @@ class ShortfinLlmLifecycleManager:
         tokenizer = Tokenizer.from_tokenizer_json_file(
             args.tokenizer_json, eos_token=eos_token
         )
+
+        self.eos_token_id = tokenizer.eos_token_id
+
         service = LlmGenerateService(
             name="default",
             sysman=sysman,
