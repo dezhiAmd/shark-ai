@@ -371,6 +371,7 @@ class LlmExecutorProcess(sf.Process):
             else:
                 raise RuntimeError(f"No available entry point for bs {req_bs}")
 
+            device0 = self.fiber.device(0)
             args, req_count = await self.get_args(bs, device0)
 
             logger.debug(
