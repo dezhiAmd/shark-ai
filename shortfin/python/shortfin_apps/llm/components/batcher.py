@@ -319,42 +319,6 @@ class LlmExecutorProcess(sf.Process):
         await device0
         return tuple(new_buffers)
 
-    async def _post_run(
-        self,
-        args: List[Union[Allocation, WrappedAllocation]],
-        req_count: int,
-        result: Tuple[sfnp.device_array, Optional[sfnp.device_array]],
-    ):
-        """Process the results after a run.
-
-        Args:
-            args (list[sfnp.device_array]): The arguments used in the run.
-            req_count (int): The number of requests in the batch.
-            result (Tuple[sfnp.device_array, Optional[sfnp.device_array]]): The results of the run.
-        """
-        seq_stride = self.seq_stride
-        device0 = self.fiber.device(0)
-
-        indices = None
-        logits = result[0]
-        if len(result) > 1:
-            indices = result[1]
-
-        # publish cache pages
-        for r in self.exec_requests:
-            total_tokens = r.start_position + len(r.input_token_ids)
-            number_of_complete_pages = total_tokens // seq_stride
-            r.publish_allocated_pages(number_of_complete_pages)
-
-        logits, indices = await self._transfer_buffer(
-            req_count=req_count, device0=device0, buffers=(logits, indices)
-        )
-
-        [arg.release() for arg in args]
-
-        # Return results.
-        await self.get_results(logits, indices, req_count)
-
     async def run(self):
         """Invoke `prefill` or `decode` function, with IREE, on a batch of requests.
 
