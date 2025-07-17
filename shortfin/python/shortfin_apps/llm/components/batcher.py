@@ -448,27 +448,30 @@ class PrefillExecutorProcess(LlmExecutorProcess):
         )
 
         # Populate tokens.
+        tokens_host = tokens.for_transfer()                                   
         for i in range(bs):
-            with tokens.host.view(i).map(discard=True) as m:
+            with tokens_host.view(i).map(discard=True) as m:
                 m.fill(0)
                 if i < req_count:
                     m.items = self.exec_requests[i].input_token_ids
 
         # Populate seq_lens
-        with seq_lens.host.map(discard=True) as m:
+        seq_lens_host = seq_lens.for_transfer()                                       
+        with seq_lens_host.map(discard=True) as m:
             m.fill(1)
             m.items = [len(req.input_token_ids) for req in self.exec_requests]
 
         # Populate cache pages.
+        seq_block_ids_host = seq_block_ids.for_transfer()                                                 
         for i in range(bs):
-            with seq_block_ids.host.view(i).map(discard=True) as m:
+            with seq_block_ids_host.view(i).map(discard=True) as m:
                 m.fill(0)
                 if i < req_count:
                     m.items = self.exec_requests[i].cache_page_indices(block_count)
 
-        tokens.transfer_to_device()
-        seq_lens.transfer_to_device()
-        seq_block_ids.transfer_to_device()
+        tokens_host.copy_to(tokens)
+        seq_lens_host.copy_to(seq_lens)
+        seq_block_ids_host.copy_to(seq_block_ids)
         # V1 args:
         #  prefill:
         #    tokens: [bs, bsl]
@@ -555,8 +558,13 @@ class DecodeExecutorProcess(LlmExecutorProcess):
             device0, [bs, block_count], int_dtype
         )
 
+        # Setup host buffers for transfer:
+        tokens_host = tokens.for_transfer()
+        seq_lens_host = seq_lens.for_transfer()
+        start_positions_host = start_positions.for_transfer()
+        seq_block_ids_host = seq_block_ids.for_transfer()
         # Populate tokens.
-        with tokens.host.map(discard=True) as m:
+        with tokens_host.map(discard=True) as m:
             m.fill(0)
             vals = []
             for i in range(bs):
@@ -565,11 +573,11 @@ class DecodeExecutorProcess(LlmExecutorProcess):
             m.items = vals
 
         # For decode, populate start_positions and seq_lens.
-        with start_positions.host.map(discard=True) as m:
+        with start_positions_host.map(discard=True) as m:
             m.fill(0)
             m.items = [req.start_position for req in self.exec_requests]
 
-        with seq_lens.host.map(discard=True) as m:
+        with seq_lens_host.map(discard=True) as m:
             # Pad unused requests.
             m.fill(
                 1  # Must pad with a nonzero value because a division by 0 during softmax floods clobber page (page 0) in cache with NaN values.
@@ -577,7 +585,7 @@ class DecodeExecutorProcess(LlmExecutorProcess):
             m.items = [req.start_position + 1 for req in self.exec_requests]
 
         # Populate cache pages.
-        with seq_block_ids.host.map(discard=True) as m:
+        with seq_block_ids_host.map(discard=True) as m:
             m.fill(0)
             block_ids = []
             for i in range(bs):
@@ -588,10 +596,10 @@ class DecodeExecutorProcess(LlmExecutorProcess):
             m.items = block_ids
 
         # Transfer to device memory:
-        tokens.transfer_to_device()
-        start_positions.transfer_to_device()
-        seq_lens.transfer_to_device()
-        seq_block_ids.transfer_to_device()
+        tokens_host.copy_to(tokens)
+        start_positions_host.copy_to(start_positions)
+        seq_lens_host.copy_to(seq_lens)
+        seq_block_ids_host.copy_to(seq_block_ids)
 
         # V1 args:
         #  decode:
