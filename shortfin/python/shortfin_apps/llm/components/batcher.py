@@ -349,11 +349,9 @@ class LlmExecutorProcess(sf.Process):
         logits, indices = await self._transfer_buffer(
             req_count=req_count, device0=device0, buffers=(logits, indices)
         )
-
-        [arg.release() for arg in args]
-
         # Return results.
         await self.get_results(logits, indices, req_count)
+
     async def run(self):
         """Invoke `prefill` or `decode` function, with IREE, on a batch of requests.
 
