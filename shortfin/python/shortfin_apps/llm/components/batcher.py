@@ -390,8 +390,7 @@ class LlmExecutorProcess(sf.Process):
             )
 
             # Invoke VMFB. Logits are of shape [bs, bsl, d].
-            args_device = [arg.device for arg in args]
-            result = await fn(*args_device, fiber=self.fiber)
+            result = await fn(*args, fiber=self.fiber)
             await self._post_run(args, req_count, result)
 
         except Exception:
