@@ -336,6 +336,8 @@ async def main(argv):
 
             try:
                 response = await responder.response
+                if isinstance(response, bytes):
+                    response = response.decode("utf-8", errors="replace")
                 if not response:
                     logger.error(f"{name} received empty response")
                     task.result = "Error: Empty response"
