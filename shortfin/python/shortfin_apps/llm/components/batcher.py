@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple, Union
 
 import shortfin as sf
 import shortfin.array as sfnp
+import numpy as np
 
 from shortfin import Fiber
 
@@ -496,6 +497,11 @@ class PrefillExecutorProcess(LlmExecutorProcess):
         tokens.transfer_to_device()
         seq_lens.transfer_to_device()
         seq_block_ids.transfer_to_device()
+
+        # Save each tensor to a .npy file
+        np.save("tokens_prefill.npy", np.array(tokens.host))
+        np.save("seq_lens_prefill.npy", np.array(seq_lens.host))
+        np.save("seq_block_ids_prefill.npy", np.array(seq_block_ids.host))
 
         # V1 args:
         #  prefill:
