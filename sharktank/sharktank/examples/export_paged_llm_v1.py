@@ -58,13 +58,14 @@ def export_llm_v1(
         # torch.export.Dim would make min at least 2
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
-        block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
+        block_dim = 100
+        assert block_dim < block_dim_max, "block dim execeed the limit"
 
         sl_dim = llama_config.block_seq_stride * block_dim
-        seq_block_ids = torch.empty(bs, block_dim_min, dtype=torch.int64)
+        seq_block_ids = torch.empty(bs, block_dim, dtype=torch.int64)
         tokens = torch.empty(
             bs,
-            seq_block_ids.shape[1] * llama_config.block_seq_stride,
+            sl_dim,
             dtype=torch.int64,
         )
         start_pos = torch.empty(bs, dtype=torch.int64)
@@ -73,9 +74,9 @@ def export_llm_v1(
         cache, cache_dynamic_shapes = setup_cache(model)
 
         dynamic_shapes = {
-            "tokens": {1: sl_dim},
+            "tokens": {},
             "seq_lens": {},
-            "seq_block_ids": {1: block_dim},
+            "seq_block_ids": {},
             "cs": cache_dynamic_shapes,
         }
 
@@ -109,12 +110,12 @@ def export_llm_v1(
         # torch.export.Dim would make min at least 2
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
-        block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
+        block_dim = 100
 
         tokens = torch.empty(bs, 1, dtype=torch.int64)
         seq_lens = torch.empty(bs, dtype=torch.int64)
         start_positions = torch.ones(bs, dtype=torch.int64)
-        seq_block_ids = torch.empty(bs, block_dim_min, dtype=torch.int64)
+        seq_block_ids = torch.empty(bs, block_dim, dtype=torch.int64)
 
         cache_state, cache_dynamic_shapes = setup_cache(model)
 
@@ -122,7 +123,7 @@ def export_llm_v1(
             "tokens": {},
             "seq_lens": {},
             "start_positions": {},
-            "seq_block_ids": {1: block_dim},
+            "seq_block_ids": {},
             "cache_state": cache_dynamic_shapes,
         }
 
