@@ -58,7 +58,11 @@ def export_llm_v1(
         # torch.export.Dim would make min at least 2
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
-        block_dim = 100
+        if export_config.chunk_prefill_size is not None:
+            block_dim = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
+        else:
+            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
+
         assert block_dim < block_dim_max, "block dim execeed the limit"
 
         sl_dim = llama_config.block_seq_stride * block_dim
@@ -73,12 +77,20 @@ def export_llm_v1(
 
         cache, cache_dynamic_shapes = setup_cache(model)
 
-        dynamic_shapes = {
-            "tokens": {},
-            "seq_lens": {},
-            "seq_block_ids": {},
-            "cs": cache_dynamic_shapes,
-        }
+        if export_config.chunk_prefill_size is not None:
+            dynamic_shapes = {
+                "tokens": {},
+                "seq_lens": {},
+                "seq_block_ids": {},
+                "cs": cache_dynamic_shapes,
+            }
+        else:
+            dynamic_shapes = {
+                "tokens": {1: sl_dim},
+                "seq_lens": {},
+                "seq_block_ids": {1: block_dim},
+                "cs": cache_dynamic_shapes,
+            }
 
         print(f"Exporting prefill_bs{bs}")
 
@@ -110,7 +122,10 @@ def export_llm_v1(
         # torch.export.Dim would make min at least 2
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
-        block_dim = 100
+        if export_config.chunk_prefill_size is not None:
+            block_dim = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
+        else:
+            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
 
         tokens = torch.empty(bs, 1, dtype=torch.int64)
         seq_lens = torch.empty(bs, dtype=torch.int64)
@@ -119,13 +134,22 @@ def export_llm_v1(
 
         cache_state, cache_dynamic_shapes = setup_cache(model)
 
-        dynamic_shapes = {
-            "tokens": {},
-            "seq_lens": {},
-            "start_positions": {},
-            "seq_block_ids": {},
-            "cache_state": cache_dynamic_shapes,
-        }
+        if export_config.chunk_prefill_size is not None:
+            dynamic_shapes = {
+                "tokens": {},
+                "seq_lens": {},
+                "start_positions": {},
+                "seq_block_ids": {},
+                "cache_state": cache_dynamic_shapes,
+            }
+        else:
+            dynamic_shapes = {
+                "tokens": {},
+                "seq_lens": {},
+                "start_positions": {},
+                "seq_block_ids": {1: block_dim},
+                "cache_state": cache_dynamic_shapes,
+            }
 
         print(f"Exporting decode_bs{bs}")
 
@@ -209,6 +233,7 @@ def main():
         use_attention_mask=args.use_attention_mask,
         use_linalgext_topk=args.use_linalgext_topk,
         has_prefill_position=args.has_prefill_position,
+        chunk_prefill_size=args.chunk_prefill_size
         bs_prefill=args.bs_prefill,
         bs_decode=args.bs_decode,
         skip_prefill=args.skip_prefill,

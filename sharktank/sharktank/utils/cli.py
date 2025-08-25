@@ -149,6 +149,12 @@ def add_model_options(parser: argparse.ArgumentParser):
         action="store_true",
     )
     parser.add_argument(
+        "--chunk-prefill-size",
+        type=int,
+        default=None,
+        help="Chunk size for chunked-prefill computation"
+    )
+    parser.add_argument(
         "--use-qk-norm",
         help="q and k got normalized in attention layer. for llama4",
         action="store_true",
