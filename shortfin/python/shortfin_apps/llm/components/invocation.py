@@ -216,8 +216,10 @@ class PrefillTask(LlmTask):
         # Compute block sequence length as maximum sequence length, rounded
         # up to the seq_stride.
         bsl = max((len(r.input_token_ids)) for r in exec_requests)
-        bsl = int(math.ceil(bsl / seq_stride) * seq_stride)
-        block_count = max(r.block_count for r in exec_requests)
+        bsl = 1600
+        # int(math.ceil(bsl / seq_stride) * seq_stride)
+        block_count = 100
+        # max(r.block_count for r in exec_requests)
         req_count = len(exec_requests)
         logger.debug("Prefill bs=%d, bsl=%d", batch_size, bsl)
 
@@ -371,7 +373,8 @@ class DecodeTask(LlmTask):
         # Compute block sequence length as maximum sequence length, rounded
         # up to the seq_stride.
         exec_requests = self.exec_requests
-        block_count = max(r.block_count for r in exec_requests)
+        block_count = 100
+        # max(r.block_count for r in exec_requests)
         req_count = len(exec_requests)
         logger.debug("Decode bs=%d", req_count)
 
