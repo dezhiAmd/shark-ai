@@ -59,25 +59,18 @@ def export_llm_v1(
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
         if export_config.chunk_prefill_size is not None:
-            block_dim = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
-        else:
-            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
-
-        assert block_dim < block_dim_max, "block dim execeed the limit"
-
-        sl_dim = llama_config.block_seq_stride * block_dim
-        seq_block_ids = torch.empty(bs, block_dim, dtype=torch.int64)
-        tokens = torch.empty(
-            bs,
-            sl_dim,
-            dtype=torch.int64,
-        )
-        start_pos = torch.empty(bs, dtype=torch.int64)
-        seq_lens = torch.empty(bs, dtype=torch.int64)
-
-        cache, cache_dynamic_shapes = setup_cache(model)
-
-        if export_config.chunk_prefill_size is not None:
+            block_dim_val = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
+            assert block_dim_val < block_dim_max, "block dim exceeds the limit"
+            sl_dim = llama_config.block_seq_stride * block_dim_val
+            seq_block_ids = torch.empty(bs, block_dim_val, dtype=torch.int64)
+            tokens = torch.empty(
+                bs,
+                sl_dim,
+                dtype=torch.int64,
+            )
+            start_pos = torch.empty(bs, dtype=torch.int64)
+            seq_lens = torch.empty(bs, dtype=torch.int64)
+            cache, cache_dynamic_shapes = setup_cache(model)
             dynamic_shapes = {
                 "tokens": {},
                 "seq_lens": {},
@@ -85,6 +78,17 @@ def export_llm_v1(
                 "cs": cache_dynamic_shapes,
             }
         else:
+            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
+            sl_dim = llama_config.block_seq_stride * block_dim
+            seq_block_ids = torch.empty(bs, block_dim_min, dtype=torch.int64)
+            tokens = torch.empty(
+                bs,
+                seq_block_ids.shape[1] * llama_config.block_seq_stride,
+                dtype=torch.int64,
+            )
+            start_pos = torch.empty(bs, dtype=torch.int64)
+            seq_lens = torch.empty(bs, dtype=torch.int64)
+            cache, cache_dynamic_shapes = setup_cache(model)
             dynamic_shapes = {
                 "tokens": {1: sl_dim},
                 "seq_lens": {},
@@ -123,18 +127,13 @@ def export_llm_v1(
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
         if export_config.chunk_prefill_size is not None:
-            block_dim = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
-        else:
-            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
-
-        tokens = torch.empty(bs, 1, dtype=torch.int64)
-        seq_lens = torch.empty(bs, dtype=torch.int64)
-        start_positions = torch.ones(bs, dtype=torch.int64)
-        seq_block_ids = torch.empty(bs, block_dim, dtype=torch.int64)
-
-        cache_state, cache_dynamic_shapes = setup_cache(model)
-
-        if export_config.chunk_prefill_size is not None:
+            block_dim_val = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
+            assert block_dim_val < block_dim_max, "block dim exceeds the limit"
+            tokens = torch.empty(bs, 1, dtype=torch.int64)
+            seq_lens = torch.empty(bs, dtype=torch.int64)
+            start_positions = torch.ones(bs, dtype=torch.int64)
+            seq_block_ids = torch.empty(bs, block_dim_val, dtype=torch.int64)
+            cache_state, cache_dynamic_shapes = setup_cache(model)
             dynamic_shapes = {
                 "tokens": {},
                 "seq_lens": {},
@@ -143,6 +142,12 @@ def export_llm_v1(
                 "cache_state": cache_dynamic_shapes,
             }
         else:
+            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
+            tokens = torch.empty(bs, 1, dtype=torch.int64)
+            seq_lens = torch.empty(bs, dtype=torch.int64)
+            start_positions = torch.ones(bs, dtype=torch.int64)
+            seq_block_ids = torch.empty(bs, block_dim_min, dtype=torch.int64)
+            cache_state, cache_dynamic_shapes = setup_cache(model)
             dynamic_shapes = {
                 "tokens": {},
                 "seq_lens": {},
@@ -233,7 +238,7 @@ def main():
         use_attention_mask=args.use_attention_mask,
         use_linalgext_topk=args.use_linalgext_topk,
         has_prefill_position=args.has_prefill_position,
-        chunk_prefill_size=args.chunk_prefill_size
+        chunk_prefill_size=args.chunk_prefill_size,
         bs_prefill=args.bs_prefill,
         bs_decode=args.bs_decode,
         skip_prefill=args.skip_prefill,
