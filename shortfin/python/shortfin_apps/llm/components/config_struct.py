@@ -156,6 +156,8 @@ class ModelParams:
     # If `top_k` > 1, logits/indices from `top_k` are returned.
     top_k: int | None = None
 
+    chunk_prefill_size: Optional[int] = None
+
     # Cache parameters.
     paged_kv_cache: PagedKVCacheParams | None = None
 

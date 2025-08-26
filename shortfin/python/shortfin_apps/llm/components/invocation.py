@@ -4,6 +4,7 @@ import math
 import shortfin as sf
 import shortfin.array as sfnp
 
+from .config_struct import ModelParams
 from typing import List, Optional, Tuple, Union
 
 from .buffers import copy_buffers_to_host, create_argument_buffers
@@ -21,11 +22,11 @@ class LlmTask:
         self,
         exec_requests: List[LlmInferenceExecRequest],
         array_cache: DeviceArrayCache,
-        seq_stride: int,
+        model_params: ModelParams,
     ):
         self.exec_requests: List[LlmInferenceExecRequest] = exec_requests
         self._array_cache: DeviceArrayCache = array_cache
-        self._seq_stride: int = seq_stride
+        self._model_params: ModelParams = model_params
 
     def get_args_data(
         self,
@@ -133,12 +134,12 @@ class PrefillTask(LlmTask):
         self,
         exec_requests: list[LlmInferenceExecRequest],
         array_cache: DeviceArrayCache,
-        seq_stride: int,
+        model_params: ModelParams,
     ):
         super().__init__(
             exec_requests=exec_requests,
             array_cache=array_cache,
-            seq_stride=seq_stride,
+            model_params=model_params,
         )
 
     def get_args_data(
@@ -208,7 +209,7 @@ class PrefillTask(LlmTask):
         """
         exec_requests = self.exec_requests
         req_count = len(exec_requests)
-        seq_stride = self._seq_stride
+        seq_stride = self._model_params.paged_kv_cache.block_seq_stride
 
         for r in exec_requests:
             assert r.start_position == 0
@@ -216,10 +217,16 @@ class PrefillTask(LlmTask):
         # Compute block sequence length as maximum sequence length, rounded
         # up to the seq_stride.
         bsl = max((len(r.input_token_ids)) for r in exec_requests)
-        bsl = 1600
-        # int(math.ceil(bsl / seq_stride) * seq_stride)
-        block_count = 100
-        # max(r.block_count for r in exec_requests)
+
+        if self._model_params.chunk_prefill_size is not None:
+            chunk_size = self._model_params.chunk_prefill_size
+            bsl = chunk_size
+            assert bsl == int(math.ceil(chunk_size / seq_stride) * seq_stride)
+            block_count = chunk_size // seq_stride
+        else:
+            bsl = int(math.ceil(bsl / seq_stride) * seq_stride)
+            block_count = max(r.block_count for r in exec_requests)
+
         req_count = len(exec_requests)
         logger.debug("Prefill bs=%d, bsl=%d", batch_size, bsl)
 
@@ -292,12 +299,12 @@ class DecodeTask(LlmTask):
         self,
         exec_requests: list[LlmInferenceExecRequest],
         array_cache: DeviceArrayCache,
-        seq_stride: int,
+        model_params: ModelParams,
     ):
         super().__init__(
             exec_requests=exec_requests,
             array_cache=array_cache,
-            seq_stride=seq_stride,
+            model_params=model_params,
         )
 
     def get_args_data(
@@ -373,8 +380,10 @@ class DecodeTask(LlmTask):
         # Compute block sequence length as maximum sequence length, rounded
         # up to the seq_stride.
         exec_requests = self.exec_requests
-        block_count = 100
-        # max(r.block_count for r in exec_requests)
+        if self._model_params.chunk_prefill_size is not None:
+            block_count = self._model_params.chunk_prefill_size // self._model_params.paged_kv_cache.block_seq_stride
+        else:
+            block_count = max(r.block_count for r in exec_requests)
         req_count = len(exec_requests)
         logger.debug("Decode bs=%d", req_count)
 

@@ -212,7 +212,7 @@ class PrefillBatcherProcess(LlmBatcherProcess):
         llm_task = PrefillTask(
             exec_requests=exec_requests,
             array_cache=self.array_cache,
-            seq_stride=self.page_seq_stride,
+            model_params=self.model_params,
         )
         return LlmInvoker(
             name="prefill_invocation",
@@ -275,7 +275,7 @@ class DecodeBatcherProcess(LlmBatcherProcess):
         llm_task = DecodeTask(
             exec_requests=exec_requests,
             array_cache=self.array_cache,
-            seq_stride=self.page_seq_stride,
+            model_params=self.model_params,
         )
         return LlmInvoker(
             name="decode_invocation",

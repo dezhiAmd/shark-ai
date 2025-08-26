@@ -185,5 +185,6 @@ def build_service_config(
         transformer_block_count=hp.block_count,
         logits_normalization=export_config.logits_normalization,
         top_k=export_config.top_k,
+        chunk_prefill_size=export_config.chunk_prefill_size,
         paged_kv_cache=kv_config,
     )

@@ -30,6 +30,7 @@ class ServiceConfig:
     transformer_block_count: int
     logits_normalization: Optional[str]
     top_k: Optional[int]
+    chunk_prefill_size: Optional[int]
     paged_kv_cache: KVCacheConfig
 
     @staticmethod
