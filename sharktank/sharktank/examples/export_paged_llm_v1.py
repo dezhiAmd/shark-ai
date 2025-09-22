@@ -49,19 +49,31 @@ def export_llm_v1(
         # torch.export.Dim would make min at least 2
         block_dim_min = 2
         block_dim_max = ceildiv(hp.context_length, llama_config.block_seq_stride) - 1
-        block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
+
+        if export_config.chunk_prefill_size is not None:
+            block_dim = ceildiv(export_config.chunk_prefill_size, llama_config.block_seq_stride)
+        else:
+            block_dim = torch.export.Dim("block", min=block_dim_min, max=block_dim_max)
 
         sl_dim = llama_config.block_seq_stride * block_dim
 
         start_pos = torch.empty(bs, dtype=torch.int64)
         cache, cache_dynamic_shapes, cache_affinities = model.setup_cache()
 
-        dynamic_shapes = {
-            "tokens": {1: sl_dim},
-            "seq_lens": {},
-            "seq_block_ids": {1: block_dim},
-            "cs": cache_dynamic_shapes,
-        }
+        if export_config.chunk_prefill_size is not None:
+            dynamic_shapes = {
+                "tokens": {},
+                "seq_lens": {},
+                "seq_block_ids": {},
+                "cs": cache_dynamic_shapes,
+            }
+        else:
+            dynamic_shapes = {
+                "tokens": {1: sl_dim},
+                "seq_lens": {},
+                "seq_block_ids": {1: block_dim},
+                "cs": cache_dynamic_shapes,
+            }
 
         if export_config.use_extend_attention:
             bs_min = 2
