@@ -17,6 +17,7 @@ class KVCacheConfig:
     block_seq_stride: int
     device_block_count: int
     kv_cache_dtype: int
+    paged_kv_block_size_elements_per_device: list[int] | None = None
 
 
 @dataclass
@@ -26,6 +27,7 @@ class ServiceConfig:
     max_seq_len: int
     attn_head_dim: int
     prefill_batch_sizes: list[int]
+    has_prefill_position: bool
     decode_batch_sizes: list[int]
     transformer_block_count: int
     logits_normalization: Optional[str]
@@ -46,11 +48,11 @@ class ExportConfig:
     device_block_count: int = 512
     top_k: Optional[int] = None
     logits_normalization: Optional[str] = None
-    use_attention_mask: bool = True
     prefill_final_logits: bool = False
     use_linalgext_topk: bool = True
     has_prefill_position: Optional[bool] = False
     chunk_prefill_size: Optional[int] = None  # Chunk size for chunked-prefill
+    use_extend_attention: Optional[bool] = False
 
     bs_prefill: list[int] = field(default_factory=lambda: [4])
     bs_decode: list[int] = field(default_factory=lambda: [32])

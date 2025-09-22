@@ -79,8 +79,8 @@ def add_model_options(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--matmul-kernel",
         type=str,
-        default=None,
-        choices=["torch", "sharktank", "sharktank.wave", "sharktank.asm"],
+        default="*",
+        help="Matmul kernel selection. Can be a single kernel (e.g. 'sharktank.asm') or preference list with semicolon separator (e.g. 'sharktank.wave;sharktank.asm;*'). Use '*' to match any kernel.",
     )
     parser.add_argument(
         "--skip-prefill",
@@ -139,13 +139,13 @@ def add_model_options(parser: argparse.ArgumentParser):
         default=512,
     )
     parser.add_argument(
-        "--use-attention-mask",
-        help="Generates attention mask during export",
+        "--has-prefill-position",
+        help="Determines if prefill offset supported during export",
         action="store_true",
     )
     parser.add_argument(
-        "--has-prefill-position",
-        help="Determines if prefill offset supported during export",
+        "--use-extend-attention",
+        help="Determines if extend attention is supported during export",
         action="store_true",
     )
     parser.add_argument(
@@ -379,6 +379,14 @@ def add_evaluate_options(parser: argparse.ArgumentParser):
         default=None,
         help="Number of tokens for prefill before starting decode.",
     )
+
+
+def get_dtype_flags(args) -> dict[str, str]:
+    return {
+        "activation_dtype": args.activation_dtype,
+        "attention_dtype": args.attention_dtype,
+        "kv_cache_dtype": args.kv_cache_dtype,
+    }
 
 
 def get_input_data_files(args) -> Optional[dict[str, list[Path]]]:

@@ -16,7 +16,6 @@
 #define FUSILLI_GRAPH_CONTEXT_H
 
 #include "fusilli/attributes/types.h"
-#include "fusilli/backend/backend.h"
 
 #include <string>
 
@@ -24,7 +23,7 @@ namespace fusilli {
 
 class Context {
 public:
-  // Setters
+  // Setters:
   Context &setIntermediateDataType(DataType type) {
     intermediateDataType_ = type;
     return *this;
@@ -45,12 +44,7 @@ public:
     return *this;
   }
 
-  Context &setBackend(Backend backend) {
-    backend_ = backend;
-    return *this;
-  }
-
-  // Getters
+  // Getters:
   DataType getIODataType() const { return ioDataType_; }
 
   DataType getIntermediateDataType() const { return intermediateDataType_; }
@@ -59,14 +53,11 @@ public:
 
   const std::string &getName() const { return name_; }
 
-  Backend getBackend() const { return backend_; }
-
 private:
   DataType computeDataType_ = DataType::NotSet;
   DataType intermediateDataType_ = DataType::NotSet;
   DataType ioDataType_ = DataType::NotSet;
   std::string name_;
-  Backend backend_;
 };
 
 } // namespace fusilli

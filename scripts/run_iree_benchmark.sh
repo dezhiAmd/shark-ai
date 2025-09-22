@@ -574,77 +574,175 @@ elif [[ $MODEL == "llama-70B-FP16-tp8" ]]; then
         --benchmark_out=${BENCHMARK_DIR}/llama-70B-FP16-tp8_decode_bs4_isl_2048.json
 
 elif [[ $MODEL == "mistral-nemo-instruct-fp8" ]]; then
-    echo "Running prefill BS1 ISL: 1024"
+    echo "Running prefill BS1 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
       --module=$VMFB    --parameters=model=$IRPA_PATH \
-      --function=prefill_bs1   --input=1x1024xsi64   --input=1xsi64 \
+      --function=prefill_bs1   --input=1x2048xsi64   --input=1xsi64 \
       --input=1x32xsi64   --input=2048x2621440xf8E4M3FNUZ \
       --benchmark_repetitions=5 \
       --benchmark_out_format=json \
-      --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs1_isl_1024.json
+      --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs1_isl_2048.json
 
-    echo "Running prefill BS2 ISL: 1024"
+    echo "Running prefill BS2 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
-        --function=prefill_bs2   --input=2x1024xsi64   --input=2xsi64 \
+        --function=prefill_bs2   --input=2x2048xsi64   --input=2xsi64 \
         --input=2x32xsi64   --input=2048x2621440xf8E4M3FNUZ \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs2_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs2_isl_2048.json
 
-    echo "Running prefill BS4 ISL: 1024"
+    echo "Running prefill BS4 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
-        --function=prefill_bs4   --input=4x1024xsi64   --input=4xsi64 \
+        --function=prefill_bs4   --input=4x2048xsi64   --input=4xsi64 \
         --input=4x32xsi64   --input=2048x2621440xf8E4M3FNUZ \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs4_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs4_isl_2048.json
 
-    echo "Running prefill BS8 ISL: 1024"
+    echo "Running prefill BS8 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
-        --function=prefill_bs8   --input=8x1024xsi64   --input=8xsi64 \
+        --function=prefill_bs8   --input=8x2048xsi64   --input=8xsi64 \
         --input=8x32xsi64   --input=2048x2621440xf8E4M3FNUZ \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs8_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_prefill_bs8_isl_2048.json
 
-    echo "Running decode BS8 ISL: 1024"
+    echo "Running decode BS8 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
         --function=decode_bs8   --input=8x1xsi64   --input=8xsi64 \
-        --input=8xsi64  --input=8x32xsi64  --input=1024x2621440xf8E4M3FNUZ  \
+        --input=8xsi64  --input=8x32xsi64  --input=2048x2621440xf8E4M3FNUZ  \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs8_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs8_isl_2048.json
 
-    echo "Running decode BS16 ISL: 1024"
+    echo "Running decode BS16 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
         --function=decode_bs16   --input=16x1xsi64   --input=16xsi64 \
-        --input=16xsi64  --input=16x32xsi64  --input=1024x2621440xf8E4M3FNUZ \
+        --input=16xsi64  --input=16x32xsi64  --input=2048x2621440xf8E4M3FNUZ \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs16_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs16_isl_2048.json
 
-    echo "Running decode BS32 ISL: 1024"
+    echo "Running decode BS32 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
         --function=decode_bs32   --input=32x1xsi64   --input=32xsi64  \
-        --input=32xsi64  --input=32x32xsi64  --input=1024x2621440xf8E4M3FNUZ \
+        --input=32xsi64  --input=32x32xsi64  --input=2048x2621440xf8E4M3FNUZ \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs32_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs32_isl_2048.json
 
-    echo "Running decode BS64 ISL: 1024"
+    echo "Running decode BS64 ISL: 2048"
     iree-benchmark-module   --device=hip   --device_allocator=caching \
         --module=$VMFB    --parameters=model=$IRPA_PATH \
         --function=decode_bs64   --input=64x1xsi64   --input=64xsi64 \
-        --input=64xsi64  --input=64x32xsi64  --input=1024x2621440xf8E4M3FNUZ \
+        --input=64xsi64  --input=64x32xsi64  --input=2048x2621440xf8E4M3FNUZ \
         --benchmark_repetitions=5 \
         --benchmark_out_format=json \
-        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs64_isl_1024.json
+        --benchmark_out=${BENCHMARK_DIR}/mistral-nemo-instruct-fp8_decode_bs64_isl_2048.json
+
+elif [[ $MODEL == "llama-405B-FP4" ]]; then
+    # TODO add more batch size
+    echo "llama-405B-FP4 prefill_bs4 ISL: 128"
+    input_root_dir="/shark-dev/llama3.1/405b/fp4/inputs/real_inputs"
+    iree-benchmark-module --hip_use_streams=true \
+        --module="$VMFB" \
+        --parameters=model="$IRPA_PATH" \
+        --device=hip://0 \
+        --function=prefill_bs4 \
+        --input=@"${input_root_dir}"/prefill/128/prefill_bs4_tokenlen128_input0_tokens.npy \
+        --input=@"${input_root_dir}"/prefill/128/prefill_bs4_tokenlen128_input1_seq_lens.npy \
+        --input=@"${input_root_dir}"/prefill/128/prefill_bs4_tokenlen128_input2_seq_block_ids.npy \
+        --input=@"${input_root_dir}"/prefill/128/prefill_bs4_tokenlen128_input3_kv_cache_state.npy \
+        --benchmark_repetitions=10 \
+        -—benchmark_min_warmup_time=10.0 \
+        --benchmark_out_format=json \
+        --benchmark_out=${BENCHMARK_DIR}/llama-405B-FP4_prefill_bs4_isl_128.json
+
+    echo "llama-405B-FP4 decode_bs4 ISL: 128"
+    iree-benchmark-module --hip_use_streams=true \
+        --module="$VMFB" \
+        --parameters=model="$IRPA_PATH" \
+        --device=hip://0 \
+        --function=decode_bs4 \
+        --input=@"${input_root_dir}"/decode/128/decode_bs4_tokenlen128_input0_tokens.npy \
+        --input=@"${input_root_dir}"/decode/128/decode_bs4_tokenlen128_input1_seq_lens.npy \
+        --input=@"${input_root_dir}"/decode/128/decode_bs4_tokenlen128_input2_start_positions.npy \
+        --input=@"${input_root_dir}"/decode/128/decode_bs4_tokenlen128_input3_seq_block_ids.npy \
+        --input=@"${input_root_dir}"/decode/128/decode_bs4_tokenlen128_input4_kv_cache_state.npy \
+        --benchmark_repetitions=10 \
+        -—benchmark_min_warmup_time=10.0 \
+        --benchmark_out_format=json \
+        --benchmark_out=${BENCHMARK_DIR}/llama-405B-FP4_decode_bs4_isl_128.json
+
+    echo "llama-405B-FP4 prefill_bs4 ISL: 512"
+    iree-benchmark-module --hip_use_streams=true \
+        --module="$VMFB" \
+        --parameters=model="$IRPA_PATH" \
+        --device=hip://0 \
+        --function=prefill_bs4 \
+        --input=@"${input_root_dir}"/prefill/512/prefill_bs4_tokenlen512_input0_tokens.npy \
+        --input=@"${input_root_dir}"/prefill/512/prefill_bs4_tokenlen512_input1_seq_lens.npy \
+        --input=@"${input_root_dir}"/prefill/512/prefill_bs4_tokenlen512_input2_seq_block_ids.npy \
+        --input=@"${input_root_dir}"/prefill/512/prefill_bs4_tokenlen512_input3_kv_cache_state.npy \
+        --benchmark_repetitions=10 \
+        -—benchmark_min_warmup_time=10.0 \
+        --benchmark_out_format=json \
+        --benchmark_out=${BENCHMARK_DIR}/llama-405B-FP4_prefill_bs4_isl_512.json
+
+    echo "llama-405B-FP4 decode_bs4 ISL: 512"
+    iree-benchmark-module --hip_use_streams=true \
+        --module="$VMFB" \
+        --parameters=model="$IRPA_PATH" \
+        --device=hip://0 \
+        --function=decode_bs4 \
+        --input=@"${input_root_dir}"/decode/512/decode_bs4_tokenlen512_input0_tokens.npy \
+        --input=@"${input_root_dir}"/decode/512/decode_bs4_tokenlen512_input1_seq_lens.npy \
+        --input=@"${input_root_dir}"/decode/512/decode_bs4_tokenlen512_input2_start_positions.npy \
+        --input=@"${input_root_dir}"/decode/512/decode_bs4_tokenlen512_input3_seq_block_ids.npy \
+        --input=@"${input_root_dir}"/decode/512/decode_bs4_tokenlen512_input4_kv_cache_state.npy \
+        --benchmark_repetitions=10 \
+        -—benchmark_min_warmup_time=10.0 \
+        --benchmark_out_format=json \
+        --benchmark_out=${BENCHMARK_DIR}/llama-405B-FP4_decode_bs4_isl_512.json
+
+    echo "llama-405B-FP4 prefill_bs4 ISL: 2500"
+    iree-benchmark-module --hip_use_streams=true \
+        --module="$VMFB" \
+        --parameters=model="$IRPA_PATH" \
+        --device=hip://0 \
+        --function=prefill_bs4 \
+        --input=@"${input_root_dir}"/prefill/2500/prefill_bs4_tokenlen2500_input0_tokens.npy \
+        --input=@"${input_root_dir}"/prefill/2500/prefill_bs4_tokenlen2500_input1_seq_lens.npy \
+        --input=@"${input_root_dir}"/prefill/2500/prefill_bs4_tokenlen2500_input2_seq_block_ids.npy \
+        --input=@"${input_root_dir}"/prefill/2500/prefill_bs4_tokenlen2500_input3_kv_cache_state.npy \
+        --benchmark_repetitions=10 \
+        -—benchmark_min_warmup_time=10.0 \
+        --benchmark_out_format=json \
+        --benchmark_out=${BENCHMARK_DIR}/llama-405B-FP4_prefill_bs4_isl_2500.json
+
+    echo "llama-405B-FP4 decode_bs4 ISL: 2500"
+    iree-benchmark-module --hip_use_streams=true \
+        --module="$VMFB" \
+        --parameters=model="$IRPA_PATH" \
+        --device=hip://0 \
+        --function=decode_bs4 \
+        --input=@"${input_root_dir}"/decode/2500/decode_bs4_tokenlen2500_input0_tokens.npy \
+        --input=@"${input_root_dir}"/decode/2500/decode_bs4_tokenlen2500_input1_seq_lens.npy \
+        --input=@"${input_root_dir}"/decode/2500/decode_bs4_tokenlen2500_input2_start_positions.npy \
+        --input=@"${input_root_dir}"/decode/2500/decode_bs4_tokenlen2500_input3_seq_block_ids.npy \
+        --input=@"${input_root_dir}"/decode/2500/decode_bs4_tokenlen2500_input4_kv_cache_state.npy \
+        --benchmark_repetitions=10 \
+        -—benchmark_min_warmup_time=10.0 \
+        --benchmark_out_format=json \
+        --benchmark_out=${BENCHMARK_DIR}/llama-405B-FP4_decode_bs4_isl_2500.json
+
+    #TODO:: Add more checks for ISL 5000/10000/20000
 else
     echo "$MODEL test not implemented"
 fi

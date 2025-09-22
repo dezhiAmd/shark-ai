@@ -101,7 +101,9 @@ class PPFFN(ThetaLayer):
 
     def forward(self, x: torch.Tensor):
         for block_idx, block in enumerate(self.blocks):
-            x = transfer_between_blocks(x, self.theta.tensor("blk", block_idx))
+            x = transfer_between_blocks(
+                x, curr_block_tensors=self.theta.tensor("blk", block_idx)
+            )
             x = block(x)
 
         return ops.unshard(x)
@@ -155,16 +157,20 @@ def main(raw_args=None):
         dim, args.tensor_parallelism_size, block_count, save_path=args.output_irpa_file
     )
 
-    ds = Dataset.load(args.output_irpa_file)
-    block_to_pipeline, pipeline_to_devices = pipeline_parallelize_llm_theta(
-        ds.root_theta, args.pipeline_parallelism_size
+    parallelism_config = ParallelismConfig.default_config(
+        block_count=block_count, pp=args.pipeline_parallelism_size
     )
+
+    ds = Dataset.load(args.output_irpa_file)
+    pipeline_parallelize_llm_theta(ds.root_theta, parallelism_config)
 
     mdl = PPFFN(ds.root_theta)
 
     example_arg = torch.empty(bs, sl, dim, dtype=torch.float16)
+    arg_devices = {0: parallelism_config.device_affinity_for_pipeline(0)}
+
     ep = torch.export.export(mdl, (example_arg,), strict=False)
-    cm = export(ep, arg_device={0: DeviceAffinity(str(pipeline_to_devices[0][0]))})
+    cm = export(ep, arg_device=arg_devices)
 
     if args.output_file == "-":
         print(cm.mlir_module)

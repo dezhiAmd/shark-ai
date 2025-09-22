@@ -42,6 +42,11 @@ def model_artifacts(tmp_path_factory, request, test_device):
     if test_device == "cpu" and model_config.tensor_parallelism_size is not None:
         pytest.skip("Skipping CPU tests with tensor parallelism")
 
+    if test_device == "cpu" and model_config.has_prefill_position is not None:
+        pytest.skip(
+            reason="Skipping CPU tests with prefill position due to compilation error"
+        )
+
     if (
         model_config.tensor_parallelism_size is not None
         and model_config.tensor_parallelism_size > 1
@@ -78,6 +83,7 @@ def server(model_artifacts, request):
         device_settings=model_config.device_settings,
         prefix_sharing_algorithm=request.param.get("prefix_sharing", "none"),
         num_beams=request.param.get("num_beams", 1),
+        chunk_block_size=request.param.get("chunk_block_size", None),
     )
 
     server_instance = ServerInstance(server_config)

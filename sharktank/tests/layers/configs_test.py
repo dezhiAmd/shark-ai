@@ -6,7 +6,7 @@
 
 import torch
 
-from sharktank.layers.configs import LlamaHParams, LlamaModelConfig
+from sharktank.layers.configs import LlamaHParams, LlamaModelConfig, ParallelismConfig
 
 
 def test_llama_hp_params_to_from_gguf_props_roundtrip():
@@ -18,6 +18,7 @@ def test_llama_hp_params_to_from_gguf_props_roundtrip():
         feed_forward_length=3,
         rope_dimension_count=4,
         rope_freq_base=5.0,
+        rope_interleave_emb=True,
         attention_head_count=6,
         attn_head_dim=4,
         attention_layer_norm_rms_epsilon=8.0,
@@ -31,6 +32,9 @@ def test_llama_hp_params_to_from_gguf_props_roundtrip():
 
 
 def test_llama_model_config_to_from_properties_roundtrip():
+    pp = 2
+    tp = 1
+
     hp = LlamaHParams(
         model_arch="llama",
         context_length=1,
@@ -39,6 +43,7 @@ def test_llama_model_config_to_from_properties_roundtrip():
         feed_forward_length=3,
         rope_dimension_count=4,
         rope_freq_base=5.0,
+        rope_interleave_emb=False,
         attention_head_count=6,
         attn_head_dim=4,
         attention_layer_norm_rms_epsilon=8.0,
@@ -46,6 +51,10 @@ def test_llama_model_config_to_from_properties_roundtrip():
         expert_count=10,
         expert_used_count=11,
         n_dense_layers=None,
+    )
+
+    parallelism_config = ParallelismConfig.default_config(
+        block_count=hp.block_count, pp=pp, tp=tp
     )
     config = LlamaModelConfig(
         hp=hp,
@@ -55,22 +64,8 @@ def test_llama_model_config_to_from_properties_roundtrip():
         activation_dtype=torch.float16,
         attention_dtype=torch.float32,
         fake_quant=False,
-        tensor_parallelism_size=13,
-        pipeline_parallelism_size=14,
-        block_to_pipeline_map=(
-            15,
-            16,
-        ),
-        pipeline_to_device_map=(
-            (
-                17,
-                18,
-            ),
-            (19,),
-        ),
+        parallelism_config=parallelism_config,
         attention_kernel="custom_attention_kernel",
-        use_hf=True,
-        static_tables=False,
         attention_chunk_size=20,
         chunked_attention_layers=set([21, 22]),
     )

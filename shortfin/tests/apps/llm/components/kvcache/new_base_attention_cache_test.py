@@ -44,10 +44,13 @@ TEST_POOL_CAPACITY = 10
 )
 # fmt: on
 def test_allocation_sizes(cache, tokens, expected_pages, case_name):
-    allocation = cache.acquire_pages_for_tokens(tokens)
+    allocation = cache.allocate(tokens)
     pages = allocation.pages
     assert len(pages) == expected_pages, f"Failed for case: {case_name}"
-    allocation.release_pages()
+    assert allocation.num_tokens == len(
+        tokens
+    ), f"Token count mismatch for case: {case_name}"
+    cache.free_pages(pages)
 
 
 # fmt: off
@@ -67,7 +70,7 @@ def test_allocation_sizes(cache, tokens, expected_pages, case_name):
 )
 # fmt: on
 def test_allocation_ref_counts(cache_ref_count, tokens, expected_pages, case_name):
-    allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+    allocation = cache_ref_count.allocate(tokens)
     ref_counts = cache_ref_count.ref_counts
     assert (
         len(ref_counts) == TEST_POOL_CAPACITY
@@ -109,7 +112,7 @@ def test_concurrent_page_allocation(
     def worker(worker_id: int):
         try:
             tokens = list(range(TEST_PAGE_SIZE * pages_per_worker))
-            allocation = cache.acquire_pages_for_tokens(tokens)
+            allocation = cache.allocate(tokens)
             allocations.append(allocation)
             allocated_pages[worker_id] = {page.index for page in allocation.pages}
             time.sleep(random.uniform(0.001, 0.01))
@@ -142,7 +145,7 @@ def test_concurrent_page_allocation(
             all_pages.update(pages)
 
     for allocation in allocations:
-        allocation.release_pages()
+        cache.free_pages(allocation.pages)
 
 
 # fmt: off
@@ -175,7 +178,7 @@ def test_concurrent_page_allocation_ref_counts(
     def worker(worker_id: int):
         try:
             tokens = list(range(TEST_PAGE_SIZE * pages_per_worker))
-            allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+            allocation = cache_ref_count.allocate(tokens)
             allocations.append(allocation)
             allocated_pages[worker_id] = {page.index for page in allocation.pages}
             time.sleep(random.uniform(0.001, 0.01))
@@ -210,7 +213,7 @@ def test_concurrent_page_allocation_ref_counts(
                 assert cache_ref_count.ref_counts[page] == 1
 
     for allocation in allocations:
-        allocation.release_pages()
+        cache_ref_count.free_pages(allocation.pages)
 
     for pages in allocated_pages.values():
         for page in pages:
@@ -230,7 +233,7 @@ def test_allocation_failure_when_exhausted(cache, cache_ref_count, total_pages_n
     for _cache in (cache, cache_ref_count):
         try:
             tokens = list(range(TEST_PAGE_SIZE * total_pages_needed))
-            allocation = _cache.acquire_pages_for_tokens(tokens)
+            allocation = _cache.allocate(tokens)
             successful_allocations.append(allocation)
         except CacheAllocationFailure as e:
             pass
@@ -238,7 +241,7 @@ def test_allocation_failure_when_exhausted(cache, cache_ref_count, total_pages_n
             pytest.fail("Expected CacheAllocationFailure was not raised")
         finally:
             for alloc in successful_allocations:
-                alloc.release_pages()
+                cache.free_pages(alloc.pages)
 
 
 # fmt: off
@@ -258,7 +261,7 @@ def test_allocation_failure_when_exhausted(cache, cache_ref_count, total_pages_n
 )
 # fmt: on
 def test_increment_pages(cache_ref_count, tokens, case_name):
-    allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+    allocation = cache_ref_count.allocate(tokens)
     ref_counts = cache_ref_count.ref_counts
 
     pages = allocation.pages
@@ -312,7 +315,7 @@ def test_concurrent_increment_pages(cache_ref_count, num_workers):
 )
 # fmt: on
 def test_decrement_pages(cache_ref_count, tokens, case_name):
-    allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+    allocation = cache_ref_count.allocate(tokens)
     ref_counts = cache_ref_count.ref_counts
 
     pages = allocation.pages
@@ -340,7 +343,7 @@ def test_decrement_pages(cache_ref_count, tokens, case_name):
 )
 # fmt: on
 def test_decrement_pages_return_empty_pages(cache_ref_count, tokens, case_name):
-    allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+    allocation = cache_ref_count.allocate(tokens)
     ref_counts = cache_ref_count.ref_counts
 
     pages = allocation.pages
@@ -443,7 +446,7 @@ def test_concurrent_increment_decrement_pages(cache_ref_count, num_workers, orde
 def test_free_pages(cache, tokens, expected_pages, case_name):
     total_pages = len(cache.page_pool.attn_page_entries)
 
-    allocation = cache.acquire_pages_for_tokens(tokens)
+    allocation = cache.allocate(tokens)
     pages = allocation.pages
 
     cache.free_pages(pages)
@@ -478,7 +481,7 @@ def test_free_pages_use_ref_count(
     total_pages = len(cache_ref_count.page_pool.attn_page_entries)
     ref_counts = cache_ref_count.ref_counts
 
-    allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+    allocation = cache_ref_count.allocate(tokens)
     pages = allocation.pages
 
     if scenario == "no_pages_freed":
@@ -528,7 +531,7 @@ async def test_fork_pages_allocation_error(cache_ref_count):
     # Use all pages
     tokens = list(range(TEST_PAGE_SIZE * TEST_POOL_CAPACITY))
 
-    allocation = cache_ref_count.acquire_pages_for_tokens(tokens)
+    allocation = cache_ref_count.allocate(tokens)
     pages = allocation.pages
     assert all(
         val == 1 for val in cache_ref_count.ref_counts

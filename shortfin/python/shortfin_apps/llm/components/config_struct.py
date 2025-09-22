@@ -139,6 +139,9 @@ class ModelParams:
     # Similarly, batch sizes that the decode stage is compiled for.
     decode_batch_sizes: list[int]
 
+    # Whether the model was exported with `start_positions` for prefill.
+    has_prefill_position: bool = False
+
     # Name of the IREE module implementing the model.
     module_name: str = "module"
 
@@ -155,8 +158,6 @@ class ModelParams:
     # If `top_k == 1`, logits/indices from `argmax` are returned.
     # If `top_k` > 1, logits/indices from `top_k` are returned.
     top_k: int | None = None
-
-    chunk_prefill_size: Optional[int] = None
 
     # Cache parameters.
     paged_kv_cache: PagedKVCacheParams | None = None
@@ -244,6 +245,8 @@ class ServerParams:
     decode_config: DecodeConfig | None = None
 
     use_native_impls: bool = False
+
+    chunk_block_size: Optional[int] = None
 
     # Device configuration
     device_ids: list[str] = field(default_factory=list)
