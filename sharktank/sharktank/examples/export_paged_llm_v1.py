@@ -293,6 +293,12 @@ def main():
     )
 
     print(f"Saving to '{args.output_mlir}'")
+    # Inject MLIR comment before saving
+    mlir_str = str(output_export)
+    comment = "// Debug: Exported MLIR for prefill/decode\n"
+    with open(args.output_mlir, "w") as f:
+        f.write(comment + mlir_str)
+
     output_export.save_mlir(args.output_mlir)
 
     output_config = dataclasses.asdict(output_config)
