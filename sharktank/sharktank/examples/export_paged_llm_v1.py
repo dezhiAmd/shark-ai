@@ -198,6 +198,15 @@ def export_llm_v1(
     )
     print("GENERATED!")
 
+    # Inject MLIR comments and save each program separately
+    for name, ep in fxb.programs.items():
+        mlir_str = str(ep)
+        comment = f"// Debug: Exported MLIR for program '{name}'\n"
+        file_name = f"{name}.mlir"
+        with open(file_name, "w") as f:
+            f.write(comment + mlir_str)
+        print(f"Saved MLIR for program '{name}' to '{file_name}'")
+
     for name, ep in fxb.programs.items():
         logger.debug(f"EXPORT {name}:\n{ep}")
 
@@ -291,15 +300,6 @@ def main():
         export_config=export_config,
         strict=args.strict,
     )
-
-    # Inject MLIR comments and save each program separately
-    for name, ep in fxb.programs.items():
-        mlir_str = str(ep)
-        comment = f"// Debug: Exported MLIR for program '{name}'\n"
-        file_name = f"{name}.mlir"
-        with open(file_name, "w") as f:
-            f.write(comment + mlir_str)
-        print(f"Saved MLIR for program '{name}' to '{file_name}'")
 
     print(f"Saving to '{args.output_mlir}'")
     output_export.save_mlir(args.output_mlir)
