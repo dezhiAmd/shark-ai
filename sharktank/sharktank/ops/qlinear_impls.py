@@ -32,6 +32,7 @@ def qlinear_tensor_scaled(
     bias: Optional[AnyTensor],
     *,
     accum_dtype: Optional[torch.dtype],
+    matmul_impl: Optional[str],
 ) -> torch.Tensor:
     # Only handle tensor scaled layouts.
     if not issubclass(x.layout_type, TensorScaledLayout) or not issubclass(
@@ -48,9 +49,15 @@ def qlinear_tensor_scaled(
 
     # Handle only integer and fp8 quantizations.
     if x_layout.qs.dtype.is_floating_point or weight_layout.qs.dtype.is_floating_point:
-        if (
-            x_layout.qs.dtype != torch.float8_e4m3fnuz
-            or weight_layout.qs.dtype != torch.float8_e4m3fnuz
+        if not (
+            (
+                x_layout.qs.dtype == torch.float8_e4m3fnuz
+                and weight_layout.qs.dtype == torch.float8_e4m3fnuz
+            )
+            or (
+                x_layout.qs.dtype == torch.float8_e4m3fn
+                and weight_layout.qs.dtype == torch.float8_e4m3fn
+            )
         ):
             return NotImplemented
 
@@ -157,10 +164,11 @@ def linear_quantized_weight(
     bias: Optional[AnyTensor],
     *,
     accum_dtype: Optional[torch.dtype],
+    matmul_impl=None,
 ) -> AnyTensor:
     if accum_dtype is not None:
         raise NotImplementedError("TODO: implement when accum_dtype is passed")
-    res = matmul(x, weight, transpose_rhs=True)
+    res = matmul(x, weight, transpose_rhs=True, impl=matmul_impl)
     if bias is not None:
         res = res + bias
     return res

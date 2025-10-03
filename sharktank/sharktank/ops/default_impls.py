@@ -23,6 +23,7 @@ from sharktank.types import (
     PlanarQuantizedTensor,
     BlockScaledI4Layout,
     BlockScaledLayout,
+    SplitPrimitiveTensor,
     TensorScaledLayout,
     QuantizedLayout,
     unbox_tensor,
@@ -30,8 +31,15 @@ from sharktank.types import (
 )
 
 from sharktank.kernels.topk import iree_topk
+from sharktank.ops.shape import normalize_negative_dim
+from sharktank.utils.attention import (
+    create_boolean_chunked_attention_mask,
+    create_causal_context_mask,
+    max_negative_value,
+)
 
-from ._registry import AllOfType, AllOfExprs, AllOfExprsVariadic, IsOfType
+from ._registry import AllOfType, AllOfExprs, AllOfExprsVariadic, IsOfType, AnyType
+from .quantized_impls import quantized_tensor_layout_of_type
 from .signatures import *
 import iree.turbine.ops.iree
 
@@ -90,12 +98,105 @@ def _split_argmax(input_tensor, dim, keepdim: bool = False, chunk_size: int = 12
     return final_index
 
 
+def attention_mask_default(
+    boolean_input_mask: torch.Tensor,
+    start_positions: torch.Tensor | None,
+    *,
+    attention_dtype: torch.dtype,
+) -> torch.Tensor:
+    device = boolean_input_mask.device
+
+    # Combine the causal context mask and input mask.
+    dtype = (
+        torch.float32 if attention_dtype == torch.float8_e4m3fnuz else attention_dtype
+    )
+    _, batch_seq_len = boolean_input_mask.shape
+
+    causal_mask = create_causal_context_mask(
+        src_len=batch_seq_len,
+        target_len=batch_seq_len,
+        start_positions=start_positions,
+        device=device,
+    )
+    boolean_mask = torch.logical_or(causal_mask, boolean_input_mask[:, None, None, :])
+    numeric_mask = torch.where(boolean_mask, max_negative_value(dtype, device), 0).to(
+        dtype
+    )
+    return numeric_mask.to(device)
+
+
+attention_mask.override(Tensor, Tensor)(attention_mask_default)
+attention_mask.override(Tensor)(attention_mask_default)
+
+
+@attention_mask_for_decode.override(Tensor)
+def attention_mask_for_decode_default(
+    boolean_input_mask: AnyTensor,
+    *,
+    attention_dtype: torch.dtype,
+) -> torch.Tensor:
+    boolean_input_mask = unbox_tensor(boolean_input_mask)
+
+    device = boolean_input_mask.device
+    dtype = (
+        torch.float32 if attention_dtype == torch.float8_e4m3fnuz else attention_dtype
+    )
+    numeric_mask = torch.where(
+        boolean_input_mask, max_negative_value(dtype, device), 0
+    ).to(dtype)
+    return numeric_mask.unsqueeze(1).unsqueeze(1).to(device)
+
+
 @cat.override(AllOfType(Tensor, PrimitiveTensor))
 def cat_default(tensors: Sequence[Tensor | PrimitiveTensor], dim: int):
     result = torch.cat([unbox_tensor(t) for t in tensors], dim)
     if isinstance(tensors[0], PrimitiveTensor):
         result = DefaultPrimitiveTensor(data=result)
     return result
+
+
+@chunked_attention_mask.override(Tensor)
+def chunked_attention_mask_default(
+    attention_mask: torch.Tensor, attention_chunk_size: int
+) -> torch.Tensor:
+    assert attention_mask.dim() == 4, "Attention mask must be 4-dimensional"
+    assert (
+        attention_mask.shape[1] == 1
+    ), f"Attention mask shape[1] ({attention_mask.shape[1]}) must be 1"
+    s2 = attention_mask.shape[2]
+    s3 = attention_mask.shape[3]
+    assert (
+        s2 == s3
+    ), f"Attention mask must be square in the last two dimensions ({s2} != {s3})"
+
+    sl = attention_mask.shape[2]
+    assert (
+        sl % attention_chunk_size == 0
+    ), f"Sequence length ({sl}) must be divisible by attention chunk size ({attention_chunk_size})"
+
+    attention_mask = unbox_tensor(attention_mask)
+
+    device = attention_mask.device
+    batch_seq_len = attention_mask.shape[2]
+    # TODO: handle decode step
+    start_index = 0
+    end_index = batch_seq_len
+    chunked_boolean_attention_mask = create_boolean_chunked_attention_mask(
+        attention_chunk_size=attention_chunk_size,
+        # TODO: handle decode step
+        start_index=start_index,
+        end_index=end_index,
+        device=device,
+    )
+
+    return torch.where(
+        chunked_boolean_attention_mask,
+        attention_mask,
+        torch.tensor(
+            max_negative_value(attention_mask.dtype, device=device),
+            dtype=attention_mask.dtype,
+        ),
+    )
 
 
 # conv2d
@@ -208,6 +309,11 @@ conv1d.override(Tensor, Tensor, Tensor, auto_dequant=True)(conv1d_default)
 conv1d.override(Tensor, Tensor, auto_dequant=True)(conv1d_default)
 
 
+@cos.override(Tensor)
+def cos_default(tensor: Tensor) -> Tensor:
+    return torch.cos(unbox_tensor(tensor))
+
+
 # Einsum
 def mk_menk_men(inputs, weights):
     # batch dims: m, lhs pdims: none, lhs rdims: k, rhs pdims: en, rhs rdims: k
@@ -245,6 +351,31 @@ def me_men_men(inputs, weights):
     return result
 
 
+def bqhmd_bkhmd_bhmqk(q, k):
+    # q: (B,q,H,M,D), k: (B,k,H,M,D) -> (B,H,M,q,k)
+    batch_seq, q_len, n_heads, q_mul, d_head = q.shape
+    batch_seq, kv_len, n_heads, q_mul, d_head = k.shape
+    q_mat = q.permute(0, 2, 3, 1, 4)  # (B, H, M, q_len,  D)
+    k_mat = k.permute(0, 2, 3, 1, 4)  # (B, H, M, kv_len, D)
+    q_mat = q_mat.reshape(batch_seq * n_heads * q_mul, q_len, d_head)
+    k_mat = k_mat.reshape(batch_seq * n_heads * q_mul, kv_len, d_head)
+    qk = matmul(q_mat, k_mat.transpose(1, 2))  # (BHM, q_len, kv_len)
+    qk = qk.view(batch_seq, n_heads, q_mul, q_len, kv_len)  # (B, H, M, q, k)
+    return qk
+
+
+def bhmqk_bkhmd_bqhmd(w, v):
+    # w: (B,H,M,q,k), v: (B,k,H,M,D) -> (B,H,M,q,D)
+    batch_seq, n_heads, q_mul, q_len, kv_len = w.shape
+    batch_seq, kv_len, n_heads, q_mul, d_head = v.shape
+    w_mat = w.reshape(batch_seq * n_heads * q_mul, q_len, kv_len)
+    v_mat = v.permute(0, 2, 3, 1, 4)
+    v_mat = v_mat.reshape(batch_seq * n_heads * q_mul, kv_len, d_head)
+    wv = matmul(w_mat, v_mat)
+    wv = wv.view(batch_seq, n_heads, q_mul, q_len, d_head).permute(0, 3, 1, 2, 4)
+    return wv
+
+
 @einsum_2args.override(AllOfType(Tensor, PrimitiveTensor, QuantizedTensor))
 def einsum_2args(input0, input1, einsum_str):
     # Special optimized einsum kernels that lower to batch matmul
@@ -254,6 +385,10 @@ def einsum_2args(input0, input1, einsum_str):
         return mek_menk_men(input0, input1)
     elif einsum_str == "me,men->men":
         return me_men_men(input0, input1)
+    elif einsum_str == "bqhmd,bkhmd->bhmqk":
+        return bqhmd_bkhmd_bhmqk(input0, input1)
+    elif einsum_str == "bhmqk,bkhmd->bqhmd":
+        return bhmqk_bkhmd_bqhmd(input0, input1)
     # Default non-QuantizedTensor einsum
     if not isinstance(input1, QuantizedTensor):
         return torch.einsum(einsum_str, unbox_tensor(input0), unbox_tensor(input1))
@@ -321,15 +456,20 @@ def expand_default(tensor: AnyTensor, shape: List[int]) -> AnyTensor:
 
 
 @expand.override(QuantizedTensor)
-def expand_quantized(tensor: QuantizedTensor, shape: List[int]) -> QuantizedTensor:
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def expand_tensor_scaled_layout(
+    tensor: QuantizedTensor, shape: List[int]
+) -> QuantizedTensor:
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = unpacked._qs.expand(*shape)
-        layout = TensorScaledLayout(
-            shape=new_qs.shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
-    return NotImplemented
+    new_qs = unpacked._qs.expand(*shape)
+    layout = TensorScaledLayout(
+        shape=new_qs.shape,
+        d=unpacked._d,
+        qs=new_qs,
+        m=unpacked._m,
+        dtype=unpacked.dtype,
+    )
+    return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
 
 
 @flatten.override(Tensor)
@@ -340,17 +480,20 @@ def flatten_default(
 
 
 @flatten.override(QuantizedTensor)
-def flatten_quantized(
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def flatten_tensor_scaled_layout(
     tensor: QuantizedTensor, start_dim: int, end_dim: int
 ) -> QuantizedTensor:
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = torch.flatten(unpacked._qs, start_dim, end_dim)
-        layout = TensorScaledLayout(
-            shape=new_qs.shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
-    return NotImplemented
+    new_qs = torch.flatten(unpacked._qs, start_dim, end_dim)
+    layout = TensorScaledLayout(
+        shape=new_qs.shape,
+        d=unpacked._d,
+        qs=new_qs,
+        m=unpacked._m,
+        dtype=unpacked.dtype,
+    )
+    return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
 
 
 @gather.override(Tensor, Tensor)
@@ -364,7 +507,7 @@ def gather_default(
 
 @extract_slice.override(AllOfType(Tensor, PrimitiveTensor))
 def extract_slice_default(tensor, key):
-    return unbox_tensor(tensor).__get_item__(key)
+    return unbox_tensor(tensor)[key]
 
 
 @extract_slice.override(QuantizedTensor)
@@ -383,7 +526,10 @@ def extract_slice_QuantizedTensor(tensor: QuantizedTensor, key: slice):
     elif isinstance(unpacked, TensorScaledLayout):
         d = unpacked._d
         qs = unpacked._qs[key]
-        m = unpacked._m[key]
+        if unpacked._m.dim() == 0:
+            m = unpacked._m
+        else:
+            m = unpacked._m[key]
         shape = qs.shape
         layout = TensorScaledLayout(shape=shape, d=d, qs=qs, m=m)
         return PlanarQuantizedTensor(shape=shape, layout=layout)
@@ -434,15 +580,18 @@ def index_copy__default(
     index = unbox_tensor(index)
     tensor = unbox_tensor(tensor)
     inout_as_torch = unbox_tensor(inout)
-    if (
-        not torch.compiler.is_compiling()
-        and inout_as_torch.is_cpu
-        and inout_as_torch.dtype == torch.float8_e4m3fnuz
-    ):
-        # PyTorch does not have eager implementation for float8_e4m3fnuz in CPU.
+    if not torch.compiler.is_compiling() and inout_as_torch.dtype in [
+        torch.float8_e4m3fnuz,
+        torch.float8_e4m3fn,
+    ]:
+        # PyTorch/PyTorch ROCm does not have eager implementation for various dtypes
+        # for CPU/GPU.
         # We need to view as int8 before performing the operation.
         # We still want to avoid the bitcasts during export as the IREE compiler has
         # trouble fusing them.
+        # We could maybe be more picky in selecting this path depending on the exact
+        # GPU arch and PyTorch ROCm version to determine if there is support to call
+        # directly.
         inout_as_torch = inout_as_torch.view(dtype=torch.int8)
         tensor = tensor.view(dtype=torch.int8)
     inout_as_torch.index_copy_(dim, index, tensor)
@@ -461,7 +610,7 @@ def index_put__default(
     if (
         not torch.compiler.is_compiling()
         and inout_as_torch.is_cpu
-        and inout_as_torch.dtype == torch.float8_e4m3fnuz
+        and inout_as_torch.dtype in [torch.float8_e4m3fnuz, torch.float8_e4m3fn]
     ):
         # PyTorch does not have eager implementation for float8_e4m3fnuz in CPU.
         # We need to view as int8 before performing the operation.
@@ -481,6 +630,16 @@ def index_select_default(
     index: Union[Tensor, PrimitiveTensor],
 ) -> Union[Tensor, PrimitiveTensor]:
     return torch.index_select(unbox_tensor(tensor), dim, unbox_tensor(index))
+
+
+@input_mask.override(Tensor)
+def input_mask_default(seq_lens: torch.Tensor, batch_seqlen: int) -> torch.Tensor:
+    seq_lens = unbox_tensor(seq_lens)
+
+    range_vector = torch.arange(0, batch_seqlen, 1, device=seq_lens.device)
+    matrix = seq_lens.unsqueeze(dim=-1)
+    mask = range_vector >= matrix
+    return mask
 
 
 @interpolate.override(Tensor)
@@ -524,13 +683,13 @@ layer_norm.override(Tensor, Tensor, Tensor)(layer_norm_default)
 
 
 # Linear
-def linear_default(input, weight, bias, *, accum_dtype) -> Tensor:
+def linear_default(input, weight, bias, *, accum_dtype, matmul_impl) -> Tensor:
     input = unbox_tensor(input)
     weight = unbox_tensor(weight)
     bias = None if bias is None else unbox_tensor(bias)
     if weight.dtype != input.dtype:
         weight = weight.to(dtype=input.dtype)
-    result = matmul(input, weight, transpose_rhs=True)
+    result = matmul(input, weight, transpose_rhs=True, impl=matmul_impl)
     if bias is not None:
         result = result + bias
     return result
@@ -552,7 +711,7 @@ def masked_fill_default(
 
 
 # Matmul
-@matmul.override(Tensor, Tensor, auto_dequant=True)
+@matmul.override(Tensor, Tensor, auto_dequant=True, impl_name="torch")
 def matmul_default(lhs, rhs, *, transpose_rhs: bool) -> Tensor:
     lhs = unbox_tensor(lhs)
     rhs = unbox_tensor(rhs)
@@ -567,21 +726,6 @@ def matmul_default(lhs, rhs, *, transpose_rhs: bool) -> Tensor:
         return torch.unflatten(mm, 0, bdims)
 
     return torch.matmul(lhs, rhs)
-
-
-# Scaled dot product attention
-@scaled_dot_product_attention.override(Tensor, Tensor, Tensor, None)
-def scaled_dot_product_attention_torch(q, k, v, a, is_causal, scale) -> Tensor:
-    q = unbox_tensor(q)
-    k = unbox_tensor(k)
-    v = unbox_tensor(v)
-    if a is not None:
-        a = unbox_tensor(a)
-
-    # TODO: plumb dropout and is_causal through ops
-    return torch.nn.functional.scaled_dot_product_attention(
-        q, k, v, attn_mask=a, dropout_p=0.0, is_causal=is_causal, scale=scale
-    )
 
 
 @mean.override(Tensor)
@@ -690,6 +834,11 @@ def sigmoid_default(tensor: Tensor) -> Tensor:
     return tensor.sigmoid()
 
 
+@sin.override(Tensor)
+def sin_default(tensor: Tensor) -> Tensor:
+    return torch.sin(unbox_tensor(tensor))
+
+
 @softmax.override(Tensor)
 def softmax_default(
     tensor: Union[Tensor, PrimitiveTensor],
@@ -706,6 +855,56 @@ def split_default(
     dim: int = 0,
 ) -> tuple[Tensor, ...]:
     return torch.split(unbox_tensor(tensor), split_size_or_sections, dim)
+
+
+@split.override(IsOfType(QuantizedTensor, SplitPrimitiveTensor))
+def split_via_extract_slice(
+    tensor: QuantizedTensor | SplitPrimitiveTensor,
+    split_size_or_sections: int | list[int],
+    dim: int = 0,
+) -> tuple[QuantizedTensor | SplitPrimitiveTensor, ...]:
+    dim = normalize_negative_dim(tensor, dim)
+    dim_size = tensor.shape[dim]
+    if isinstance(split_size_or_sections, int):
+        sections = [split_size_or_sections] * (dim_size // split_size_or_sections)
+        reminder = dim_size % split_size_or_sections
+        if reminder != 0:
+            sections.append(reminder)
+        return split(tensor, sections, dim)
+
+    assert len(split_size_or_sections) > 0
+    parts_range = [(0, split_size_or_sections[0])]
+    for s in split_size_or_sections[1:]:
+        parts_range.append((parts_range[-1][1], parts_range[-1][1] + s))
+    assert parts_range[-1][1] == dim_size
+
+    res = []
+    for begin, end in parts_range:
+        slice_ = tuple(
+            slice(begin, end) if i == dim else slice(None) for i in range(dim + 1)
+        )
+        res.append(extract_slice(tensor, slice_))
+    return tuple(res)
+
+
+@swiglu.override(Tensor)
+def swiglu_default(
+    x: Tensor, *, alpha: float = 1.702, limit: float | None = None
+) -> Tensor:
+    x = unbox_tensor(x)
+    if x.size(-1) % 2 != 0:
+        raise ValueError(f"SwiGLU expects even last dim, got {x.size(-1)}")
+
+    # Split interleaved channels using NumPy-style slicing (start:stop:step).
+    x_glu = x[..., ::2]  # even indices along the last dimension
+    x_lin = x[..., 1::2]  # odd indices along the last dimension
+
+    if limit is not None:
+        x_glu = x_glu.clamp(min=None, max=limit)
+        x_lin = x_lin.clamp(min=-limit, max=limit)
+    # SwiGLU: swish(alpha * a) * (b + 1)
+    out_glu = x_glu * torch.sigmoid(alpha * x_glu)
+    return out_glu * (x_lin + 1)
 
 
 @to.override(Tensor)
@@ -834,15 +1033,20 @@ def unsqueeze_default(tensor: Union[Tensor, PrimitiveTensor], dim: int) -> Tenso
 
 
 @unsqueeze.override(QuantizedTensor)
-def unsqueeze_quantized(tensor: QuantizedTensor, dim: int) -> QuantizedTensor:
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def unsqueeze_tensor_scaled_layout(
+    tensor: QuantizedTensor, dim: int
+) -> QuantizedTensor:
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = unpacked._qs.unsqueeze(dim)
-        layout = TensorScaledLayout(
-            shape=new_qs.shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
-    return NotImplemented
+    new_qs = unpacked._qs.unsqueeze(dim)
+    layout = TensorScaledLayout(
+        shape=new_qs.shape,
+        d=unpacked._d,
+        qs=new_qs,
+        m=unpacked._m,
+        dtype=unpacked.dtype,
+    )
+    return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
 
 
 @squeeze.override(AllOfType(AnyTensor, PrimitiveTensor))
@@ -991,25 +1195,25 @@ def view_default(
 
 
 @view.override(QuantizedTensor)
-def view_QuantizedTensor(tensor: QuantizedTensor, shape):
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def view_tensor_scaled_layout(tensor: QuantizedTensor, shape, dtype):
+    if dtype:
+        return NotImplemented
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = unpacked._qs.view(shape)
-        layout = TensorScaledLayout(
-            shape=shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=shape, layout=layout)
-    elif isinstance(unpacked, BlockScaledI4Layout):
-        bs = 16
-        shape = list(shape)
-        new_d = unpacked._d.view(shape[:-1] + [shape[-1] // 32, 1])
-        qs_shape = shape[:-1] + [shape[-1] // 32, 16]
-        new_qs = unpacked._qs.view(qs_shape)
-        if unpacked.m is not None:
-            new_m = unpacked.m.view(shape[:-1] + [shape[-1] // 32, 1])
-        layout = BlockScaledI4Layout(shape=shape, d=new_d, qs=new_qs, m=new_m)
-        return PlanarQuantizedTensor(shape=shape, layout=layout)
-    return NotImplemented
+    new_qs = unpacked._qs.view(shape)
+    layout = TensorScaledLayout(
+        shape=shape, d=unpacked._d, qs=new_qs, m=unpacked._m, dtype=dtype
+    )
+    return PlanarQuantizedTensor(shape=shape, layout=layout)
+
+
+@view.override(QuantizedTensor)
+@quantized_tensor_layout_of_type(tensor=BlockScaledLayout)
+def view_block_scaled_layout(tensor: QuantizedTensor, shape, dtype):
+    if dtype:
+        return NotImplemented
+    unpacked = tensor.unpack()
+    return view_block_scaled(tensor, shape, dtype)
 
 
 @view_as_complex.override(Tensor)

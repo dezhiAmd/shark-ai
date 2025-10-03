@@ -24,8 +24,10 @@ import subprocess
 from typing import Optional
 from abc import abstractmethod
 
+import iree.compiler as ireec  # type: ignore
 from iree.compiler import ir  # type: ignore
 from iree.compiler.dialects import iree_codegen  # type: ignore
+from iree.compiler.dialects import iree_gpu  # type: ignore
 
 from . import (
     common,
@@ -188,20 +190,25 @@ def generate_configs_and_td_specs(
         spec_builder.get_placeholder_spec(input_module.context)
     ]
 
-    # Get the MMA intrinisic intructions supported by the target.
+    # Get GPU target information from the executable variant operation.
     variant_op_list = iree_codegen.get_executable_variant_ops(input_module)
     assert len(variant_op_list) == 1, "Expect one executable variant op"
     variant_op = variant_op_list[0]
-    mma_intrinsics = iree_codegen.query_mma_intrinsics(variant_op)
+    executable_variant_op = variant_op.opview
+    target = executable_variant_op.target
+    target_info = iree_gpu.TargetInfo.get_gpu_target_info(target)
+
+    if target_info.arch not in ["gfx942", "gfx1100"]:
+        print(f"Warning: Untested architecture '{target_info.arch}'.")
 
     constraint_generator = dispatch_tuner.get_constraint_generator()
 
     for i, config in enumerate(
         constraint_generator.generate_solutions(
             tuner_context,
+            target_info,
             codegen_pipeline,
             num_subgroups=num_subgroups,
-            mma_intrinsics=mma_intrinsics,
             allowed_waves_per_eu=allowed_waves_per_eu,
             pipeline_options_search_space=pipeline_options_search_space,
         )
@@ -238,11 +245,11 @@ def run_command(run_pack: RunPack) -> RunResult:
     result = None
     is_timeout = False
     try:
-        # Convert the command list to a command string for logging
+        # Convert the command list to a command string for logging.
         command_str = " ".join(command)
         logging.debug(f"Run: {command_str}")
 
-        # Add timeout to subprocess.run call
+        # Add timeout to subprocess.run call.
         result = subprocess.run(
             command,
             check=check,
@@ -286,9 +293,11 @@ def strip_root_op_attr(module: ir.Module):
 
 # See the above comment for `strip_root_op_attr`.
 def strip_compilation_info(input_path: Path) -> str:
-    # Strip compilation info from the source and save the stripped IR
+    # Strip compilation info from the source and save the stripped IR.
+    iree_opt = ireec.binaries.find_tool("iree-opt")  # type: ignore
+    assert iree_opt, "iree-opt tool not found"
     strip_command = [
-        f"iree-opt",
+        iree_opt,
         f"{input_path}",
         f"--iree-codegen-strip-compilation-info",
     ]
@@ -348,10 +357,10 @@ def main() -> None:
     args = parser.parse_args()
     tune_logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-    # Create printing formatter for logging info
+    # Create printing formatter for logging info.
     formatter = logging.Formatter("%(message)s")
 
-    # Create a handler to print to console
+    # Create a handler to print to console.
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     tune_logger.addHandler(console_handler)

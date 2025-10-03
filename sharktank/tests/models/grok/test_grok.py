@@ -13,7 +13,6 @@ import pytest
 
 @pytest.mark.xfail(
     raises=AssertionError,
-    strict=False,
     reason="https://github.com/nod-ai/shark-ai/issues/1270",
 )
 def test_grok():
@@ -38,9 +37,9 @@ def test_grok():
 
     logits = model.prefill(
         tokens=ids,
-        attention_mask=[None],
+        seq_lens=torch.tensor([seq_len]),
         cache_state=cache_state,
-        seq_block_ids=[block_ids],
+        seq_block_ids=block_ids,
     )
 
     # Remove padding

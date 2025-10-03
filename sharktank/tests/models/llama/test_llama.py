@@ -10,10 +10,9 @@ import unittest
 import pytest
 import torch
 
-from itertools import product
-from parameterized import parameterized
 
-from sharktank.models.llm import *
+from pathlib import Path
+from sharktank.models.llm.llm import PagedLlmModelV1
 from sharktank.models.llama.toy_llama import generate
 from sharktank.utils.export_artifacts import IreeCompileException
 from sharktank.utils.testing import (
@@ -39,7 +38,7 @@ class CrossEntropyTest(unittest.TestCase):
         ids = ids + [0] * padding
 
         ids = torch.asarray([ids], dtype=torch.int64)
-        block_ids = [torch.asarray([[i for i in range(blocks)]]).to(torch.int64)]
+        block_ids = torch.asarray([[i for i in range(blocks)]]).to(torch.int64)
 
         cache_state = model.cache.allocate(
             page_count=config.hp.context_length // config.block_seq_stride
@@ -47,7 +46,7 @@ class CrossEntropyTest(unittest.TestCase):
 
         logits = model.prefill(
             tokens=ids,
-            attention_mask=[None],
+            seq_lens=torch.tensor([seq_len]),
             cache_state=cache_state,
             seq_block_ids=block_ids,
         )
@@ -65,33 +64,35 @@ class CrossEntropyTest(unittest.TestCase):
 @pytest.mark.usefixtures("iree_flags", "device")
 @is_mi300x
 class LlamaIreeVsEagerTest(TempDirTestBase):
-    @parameterized.expand(product([1, 2], [1, 2], [False, True]))
     @pytest.mark.xfail(
         raises=IreeCompileException,
         reason="https://github.com/iree-org/iree/issues/21462, https://github.com/nod-ai/shark-ai/issues/1758",
-        strict=True,
     )
-    def testUnshardedToyIreeVsEager(
-        self, tensor_parallelism_size: int, pipeline_parallelism_size: int, use_hf: bool
-    ):
+    def testUnshardedToyIreeVsEager(self):
         theta, config = generate(12345)
-        config.tensor_parallelism_size = tensor_parallelism_size
-        config.pipeline_parallelism_size = pipeline_parallelism_size
-        config.use_hf = use_hf
 
-        try:
-            tester = IreeVsEagerLLMTester(
-                work_dir=self._temp_dir,
-                theta=theta,
-                config=config,
-                torch_device=self.device,
-                iree_device=self.iree_device,
-                iree_hip_target=self.iree_hip_target,
-                iree_hal_target_device=self.iree_hal_target_device,
-            )
-            tester.run_and_compare_iree_vs_eager()
-        except IreeCompileException as e:
-            if tensor_parallelism_size == 2 or pipeline_parallelism_size == 2:
-                pytest.xfail(reason="sharding compilation is broken")
-            else:
-                raise e
+        tester = IreeVsEagerLLMTester(
+            work_dir=self._temp_dir,
+            theta=theta,
+            config=config,
+            torch_device=self.device,
+            iree_device=self.iree_device,
+            iree_hip_target=self.iree_hip_target,
+            iree_hal_target_device=self.iree_hal_target_device,
+        )
+        tester.run_and_compare_iree_vs_eager()
+
+
+@pytest.mark.expensive
+def test_import_llama3_8B_instruct(tmp_path: Path):
+    from sharktank.tools.import_hf_dataset_from_hub import main
+
+    irpa_path = tmp_path / "model.irpa"
+    main(
+        [
+            "--revision=0e9e39f249a16976918f6564b8830bc894c89659",
+            f"--output-irpa-file={irpa_path}",
+            "meta-llama/Llama-3.1-8B-Instruct",
+        ]
+    )
+    assert irpa_path.exists()

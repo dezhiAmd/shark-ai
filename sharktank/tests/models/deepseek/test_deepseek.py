@@ -9,13 +9,10 @@ import unittest
 
 import torch
 
-from itertools import product
 from parameterized import parameterized
 
-from sharktank.models.llm import *
 from sharktank.models.deepseek.toy_deepseek import generate
-from sharktank.utils.export_artifacts import IreeCompileException
-from sharktank.utils.load_llm import *
+from sharktank.utils.llm_utils import TorchInstance, llama_config_page_sizes, LlmBatcher
 from sharktank.utils.evaluate import *
 from sharktank.utils.testing import (
     is_mi300x,
@@ -32,29 +29,29 @@ class DeepseekCrossEntropyTest(unittest.TestCase):
         ]
     )
     def testUnsharded(self, dtype_rest: torch.dtype, dtype_norm: torch.dtype):
-        theta, config = generate(12345, dtype_rest=dtype_rest, dtype_norm=dtype_norm)
-        model = PagedLlmModelV1(theta=theta, config=config)
+        theta, cfg = generate(12345, dtype_rest=dtype_rest, dtype_norm=dtype_norm)
+        model = TorchInstance(theta=theta, config=cfg)
+        page_sizes = llama_config_page_sizes(model.config)
 
         ids = [[3, 22, 13, 114, 90, 232, 61, 13, 244, 13, 212]]
 
-        token_ids, seq_lens = pad_tokens(
+        llm_batch = LlmBatcher(
+            instance=model,
+            page_count=cfg.hp.block_count,
+            page_sizes=page_sizes,
+            block_stride=cfg.block_seq_stride,
+            kv_cache_dtype="float16",
+        )
+
+        page_ids = [llm_batch.allocate(token_count=len(ids[0]))]
+        logits, _ = llm_batch.prefill(ids, page_ids=page_ids)
+
+        token_ids, _ = pad_tokens(
             token_ids=ids,
-            pad_to_multiple_of=config.block_seq_stride,
+            pad_to_multiple_of=cfg.block_seq_stride,
         )
-        token_ids = torch.as_tensor(token_ids)
-        seq_lens = torch.as_tensor(seq_lens)
-
-        generator = TorchGenerator(model)
-        batch = generator.begin_batch(
-            token_ids=token_ids,
-            seq_lens=seq_lens,
-        )
-
-        batch.prefill()
-        logits = batch.prefill_logits
-
-        ids = token_ids[0, :-1]
-        logits = logits[0, 1:]
+        ids = torch.as_tensor(token_ids[0][:-1])
+        logits = torch.as_tensor(logits)[0, 1:]
         cross_entropy = torch.nn.functional.cross_entropy(logits, ids)
 
         assert pytest.approx(9.7477, 1e-4) == cross_entropy
@@ -63,37 +60,21 @@ class DeepseekCrossEntropyTest(unittest.TestCase):
 @pytest.mark.usefixtures("iree_flags", "device")
 @is_mi300x
 class DeepseekIreeVsEagerTest(TempDirTestBase):
-    @parameterized.expand(product([1, 2], [1, 2]))
     @pytest.mark.xfail(
         raises=AssertionError,
         reason="https://github.com/nod-ai/shark-ai/issues/1758",
-        strict=True,
         match="Outputs do not match for prefill batch index 0",
     )
-    def testUnshardedToyIreeVsEager(
-        self, tensor_parallelism_size: int, pipeline_parallelism_size: int
-    ):
-        theta, config = generate(12345)
-        config.tensor_parallelism_size = tensor_parallelism_size
-        config.pipeline_parallelism_size = pipeline_parallelism_size
+    def testUnshardedToyIreeVsEager(self):
+        theta, cfg = generate(12345)
 
-        try:
-            tester = IreeVsEagerLLMTester(
-                work_dir=self._temp_dir,
-                theta=theta,
-                config=config,
-                torch_device=self.device,
-                iree_device=self.iree_device,
-                iree_hip_target=self.iree_hip_target,
-                iree_hal_target_device=self.iree_hal_target_device,
-            )
-        except IreeCompileException as e:
-            if tensor_parallelism_size == 2:
-                pytest.xfail(reason="https://github.com/iree-org/iree/issues/20354")
-            elif pipeline_parallelism_size == 2:
-                pytest.xfail(reason="https://github.com/iree-org/iree/issues/21278")
-            else:
-                raise e
-        assert tensor_parallelism_size != 2
-        # assert pipeline_parallelism_size != 2  # Fails locally, but passes on CI.
+        tester = IreeVsEagerLLMTester(
+            work_dir=self._temp_dir,
+            theta=theta,
+            config=cfg,
+            torch_device=self.device,
+            iree_device=self.iree_device,
+            iree_hip_target=self.iree_hip_target,
+            iree_hal_target_device=self.iree_hal_target_device,
+        )
         tester.run_and_compare_iree_vs_eager()

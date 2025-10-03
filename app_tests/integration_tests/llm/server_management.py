@@ -26,8 +26,8 @@ class ServerConfig:
     artifacts: ModelArtifacts
     device_settings: DeviceSettings
     prefix_sharing_algorithm: str = "none"
-    use_beam_search: bool = False
     num_beams: int = 1
+    chunk_block_size: Optional[int] = None
 
 
 class ServerInstance:
@@ -86,10 +86,12 @@ class ServerInstance:
             "--num_beams",
             str(self.config.num_beams),
         ]
+
+        if self.config.chunk_block_size is not None:
+            argv.extend(["--chunk_block_size", str(self.config.chunk_block_size)])
+
         argv.extend(parameters)
         argv.extend(self.config.device_settings.server_flags)
-        if self.config.use_beam_search:
-            argv.append("--use_beam_search")
 
         return argv
 

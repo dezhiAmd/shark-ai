@@ -15,6 +15,7 @@ from typing import Any
 import subprocess
 import tempfile
 import os
+import time
 
 from iree.compiler import ir  # type: ignore
 
@@ -43,6 +44,9 @@ class CommonTypes:
     def getI64(self, value: int) -> ir.IntegerAttr:
         return ir.IntegerAttr.get(self.i64, value)
 
+    def getI64ArrayAttr(self, values: list[int]) -> ir.ArrayAttr:
+        return ir.ArrayAttr.get([self.getI64(x) for x in values])
+
 
 class TunerContext:
     def __init__(self, logger: Optional[logging.Logger] = None):
@@ -61,6 +65,34 @@ class TunerContext:
         traceback: TracebackType | None,
     ) -> bool:
         return self.mlir_ctx.__exit__(exc_type, exc_value, traceback)
+
+
+@dataclass
+class TimeBudget:
+    """Wall-clock deadline helper based on time.monotonic()."""
+
+    deadline: Optional[float] = None  # Absolute monotonic time (seconds).
+
+    @classmethod
+    def for_minutes(cls, minutes: Optional[float], now: Optional[float] = None):
+        """Create a budget that lasts 'minutes' from a given 'now' (monotonic seconds)."""
+        if minutes is None or minutes <= 0:
+            return None
+        if now is None:
+            now = time.monotonic()
+        return cls(now + (minutes * 60.0))
+
+    def expired(self, current_time: Optional[float] = None) -> bool:
+        if current_time is None:
+            current_time = time.monotonic()
+        return self.deadline is not None and current_time >= self.deadline
+
+    def remaining(self, current_time: Optional[float] = None) -> Optional[float]:
+        if current_time is None:
+            current_time = time.monotonic()
+        if self.deadline is None:
+            return None
+        return max(0.0, self.deadline - current_time)
 
 
 @dataclass
@@ -181,20 +213,24 @@ def get_compatible_mfma_intrinsics(
     lhs_type: ShapedType,
     rhs_type: ShapedType,
     res_type: ShapedType,
-    mma_intrinsics: list[iree_gpu.MMAIntrinsic],
-) -> list[iree_gpu.MMAIntrinsic]:
-    def is_comptible(mma_intrinsic: iree_gpu.MMAIntrinsic) -> bool:
-        mma_attr = iree_gpu.MMAIntrinsicAttr.get(mma_intrinsic).mma
-        a_type, b_type, c_type = mma_attr.abc_element_types
-        if not isinstance(res_type.element_type, type(c_type)):
-            return False
-        if not isinstance(lhs_type.element_type, type(a_type)) or not isinstance(
-            rhs_type.element_type, type(b_type)
-        ):
-            return False
-        return True
+    mma_intrinsics: list[iree_gpu.MMAIntrinsic | iree_gpu.VirtualMMAIntrinsic],
+) -> list[iree_gpu.MMAIntrinsic | iree_gpu.VirtualMMAIntrinsic]:
+    def is_compatible(
+        mma: iree_gpu.MMAIntrinsic | iree_gpu.VirtualMMAIntrinsic,
+    ) -> bool:
+        if isinstance(mma, iree_gpu.VirtualMMAIntrinsic):
+            mma_attr = iree_gpu.VirtualMMAAttr.get(mma)
+        else:
+            mma_attr = iree_gpu.MMAAttr.get(mma)
 
-    return list(filter(is_comptible, mma_intrinsics))
+        a_type, b_type, c_type = mma_attr.abc_element_types
+        return (
+            lhs_type.element_type == a_type
+            and rhs_type.element_type == b_type
+            and res_type.element_type == c_type
+        )
+
+    return list(filter(is_compatible, mma_intrinsics))
 
 
 # The key name for GPUPipelineOptionsAttr in the translation info config dictionary.
@@ -223,15 +259,22 @@ def get_lowering_config(
                     assert (
                         False
                     ), f"Unsupported type for key '{key}': {type(value).__name__}"
-            case "subgroup_m_count" | "subgroup_n_count":
-                if isinstance(value, int):
-                    promoted_value = tuner_ctx.type.getI64(value)
-                elif not isinstance(value, tuner_ctx.type.i64):
+            case "subgroup_basis":
+                if isinstance(value, list) and len(value) == 2:
+                    counts, mapping = value
+                    assert isinstance(counts, list) and isinstance(
+                        mapping, list
+                    ), f"subgroup_basis must contain two lists [counts, mapping]"
+                    counts_attr = tuner_ctx.type.getI64ArrayAttr(counts)
+                    mapping_attr = tuner_ctx.type.getI64ArrayAttr(mapping)
+                    promoted_value = ir.ArrayAttr.get([counts_attr, mapping_attr])
+
+                else:
                     assert (
                         False
                     ), f"Unsupported type for key '{key}': {type(value).__name__}"
             case "mma_kind":
-                if not isinstance(value, iree_gpu.MMAAttr):
+                if not isinstance(value, (iree_gpu.MMAAttr, iree_gpu.VirtualMMAAttr)):
                     assert (
                         False
                     ), f"Unsupported type for key '{key}': {type(value).__name__}"
@@ -315,7 +358,8 @@ def link_tuning_specs(tuner_ctx: TunerContext, td_specs: list[ir.Module]) -> ir.
     into one tuning spec.
     """
     module = combine_tuning_specs(tuner_ctx, td_specs)
-    iree_opt = ireec.binaries.find_tool("iree-opt")
+    iree_opt = ireec.binaries.find_tool("iree-opt")  # type: ignore
+    assert iree_opt, "iree-opt tool not found"
 
     if len(td_specs) == 1:
         # avoid unnessary link overhead.

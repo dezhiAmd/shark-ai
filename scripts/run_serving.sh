@@ -107,12 +107,51 @@ echo "Server with PID $shortfin_process is ready to accept requests on port $por
 
 echo "Running Client ..."
 
+start_time=$(date +%s)
+
 curl http://localhost:$port/generate \
            -H "Content-Type: application/json" \
            -d '{
               "text": "<|begin_of_text|>Name the capital of the United States.<|eot_id|>",
                 "sampling_params": {"max_completion_tokens": 50}
-            }' > $(pwd)/../output_artifacts/online_serving.log
+            }' > ${SCRIPT_DIR}/../output_artifacts/online_serving.log
+
+end_time=$(date +%s)
+time_taken=$((end_time - start_time))
+echo -e "\nTime Taken for Getting Response: $time_taken seconds" >> ${SCRIPT_DIR}/../output_artifacts/online_serving.log
 
 sleep 10
 kill -9 $shortfin_process
+
+# Check if the file exists
+file="${SCRIPT_DIR}/../output_artifacts/online_serving.log"
+if [ -e "$file" ]; then
+    echo "The file '$file' exists."
+else
+    echo "The file '$file' does NOT exist."
+    exit 1
+fi
+
+# Check for Online Serving Response
+expected_1="\"responses\": [{\"text\": \"assistant\\nThe capital of the United States is Washington, D.C.\"}]"
+expected_2="\"responses\": [{\"text\": \"assistant\\n\\nThe capital of the United States is Washington, D.C. (short for District of Columbia).\"}]"
+expected_3="\"responses\": [{\"text\": \"assistant\\n\\nThe capital of the United States is Washington, D.C.\"}]"
+expected_4="\"responses\": [{\"text\": \"Washington D.C.\"}]"
+
+if grep -F "$expected_1" "$file"; then
+    echo "[SUCCESS] Online Response Matches Expected Output."
+elif grep -F "$expected_2" "$file"; then
+    echo "[SUCCESS] Online Response Matches Expected Output."
+elif grep -F "$expected_3" "$file"; then
+    echo "[SUCCESS] Online Response Matches Expected Output."
+elif grep -F "$expected_4" "$file"; then
+    echo "[SUCCESS] Online Response Matches Expected Output."
+elif grep -Eiq '"text": ".*washington(,?\s*d\.?c\.?)?"' "$file"; then
+    echo "[CHECK REQUIRED] Partially Correct Response Detected."
+    cat "$file"
+    exit 1
+else
+    echo "[FAILURE] Gibberish or Invalid Response Detected."
+    cat "$file"
+    exit 1
+fi

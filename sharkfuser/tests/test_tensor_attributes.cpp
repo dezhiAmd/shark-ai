@@ -4,12 +4,14 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include <fusili.h>
+#include <fusilli.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
+#include <span>
 #include <vector>
 
-using namespace fusili;
+using namespace fusilli;
 
 TEST_CASE("TensorAttr fill_from_context", "[TensorAttr]") {
   Context ctx;
@@ -53,77 +55,124 @@ TEST_CASE("TensorAttr method chaining", "[TensorAttr]") {
   REQUIRE(t.isVirtual());
 }
 
+TEST_CASE("TensorAttr setter templated overrides", "[TensorAttr]") {
+  TensorAttr t;
+  std::vector<int64_t> dimVec = {2, 3, 4};
+  std::vector<int64_t> strideVec = {12, 4, 1};
+
+  std::span<int64_t> dimSpan(dimVec);
+  std::span<int64_t> strideSpan(strideVec);
+
+  // Setters either take a const std::vector& or a type constrained template,
+  // std::span should call the templated override.
+  auto &result = t.setDim(dimSpan).setStride(strideSpan);
+
+  REQUIRE(t.getDim() == dimVec);
+  REQUIRE(t.getStride() == strideVec);
+}
+
 TEST_CASE("TensorAttr validation edge cases", "[TensorAttr]") {
-  SECTION("Empty dim fails validation") {
+  SECTION("Unspecified dim fails validation") {
     TensorAttr t;
-    t.setName("nodim").setStride({1});
-    REQUIRE(t.validate().isError());
+    t.setName("nodim").setStride({1}).setDataType(DataType::Float);
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "Tensor 'nodim' dims not set");
   }
 
-  SECTION("Empty stride fails validation") {
+  SECTION("Unspecified stride fails validation") {
     TensorAttr t;
-    t.setName("nostride").setDim({1});
-    REQUIRE(t.validate().isError());
+    t.setName("nostride").setDim({1}).setDataType(DataType::Float);
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "Tensor 'nostride' strides not set");
   }
 
-  SECTION("Empty name still validates if dims and strides are set") {
+  SECTION("Unspecified dtype fails validation") {
     TensorAttr t;
-    t.setDim({2}).setStride({1});
-    REQUIRE(t.validate().isOk());
+    t.setName("nostride").setDim({1}).setStride({1});
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "Tensor 'nostride' data type not set");
+  }
+
+  SECTION(
+      "Unspecified name still validates if dims, strides and dtype are set") {
+    TensorAttr t;
+    t.setDim({2}).setStride({1}).setDataType(DataType::Float);
+    REQUIRE(isOk(t.validate()));
   }
 
   SECTION("Dim and stride of different ranks is invalid") {
     TensorAttr t;
-    t.setName("diffrank").setDim({2}).setStride({1, 1});
-    REQUIRE(t.validate().isError());
+    t.setName("diffrank")
+        .setDim({2})
+        .setStride({1, 1})
+        .setDataType(DataType::Float);
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(
+        status.getMessage() ==
+        "Tensor 'diffrank' uses dim and stride of different dimensionality");
   }
 
   SECTION("Single dimension tensor") {
     TensorAttr t;
-    t.setName("single").setDim({5}).setStride({1});
-    REQUIRE(t.validate().isOk());
+    t.setName("single").setDim({5}).setStride({1}).setDataType(DataType::Float);
+    REQUIRE(isOk(t.validate()));
     REQUIRE(t.getVolume() == 5);
   }
 
-  SECTION("Zero dimension in tensor") {
+  SECTION("Zero dimension tensor") {
     TensorAttr t;
-    t.setName("zero").setDim({2, 0, 3}).setStride({6, 3, 1});
-    REQUIRE(t.validate().isOk());
+    t.setName("zero").setDim({2, 0, 3}).setStride({6, 3, 1}).setDataType(
+        DataType::Float);
+    REQUIRE(isOk(t.validate()));
     REQUIRE(t.getVolume() == 0);
-  }
-
-  SECTION("Non-contiguous (strided) tensors fail validation") {
-    TensorAttr t1, t2;
-
-    t1.setName("contig").setDim({4, 3}).setStride({3, 1});
-    REQUIRE(t1.validate().isOk());
-
-    t2.setName("non_contig").setDim({4, 3}).setStride({1, 4});
-    REQUIRE(t2.validate().isError());
   }
 
   SECTION("Virtual and scalar tensors can't coexist") {
     TensorAttr t;
-    t.setDim({1}).setStride({1});
+    t.setName("invalid").setDim({1}).setStride({1}).setDataType(
+        DataType::Float);
     t.setIsVirtual(true).setIsScalar(true);
-    REQUIRE(t.validate().isError());
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() == "Tensor 'invalid' cannot be both virtual "
+                                   "(intermediate) and a scalar constant");
   }
 
   SECTION("Scalar value set but not marked scalar") {
     TensorAttr t(3.14);
     REQUIRE(t.isScalar());
-    t.setIsScalar(false);
+    t.setName("nonscalar").setIsScalar(false);
     REQUIRE(!t.isScalar());
-    REQUIRE(t.validate().isError());
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() == "Tensor 'nonscalar' has a scalar value set "
+                                   "but is not marked as a scalar");
   }
 
   SECTION("Scalar value not set but marked scalar") {
     TensorAttr t;
-    t.setDim({1}).setStride({1});
+    t.setName("nonscalar")
+        .setDim({1})
+        .setStride({1})
+        .setDataType(DataType::Float);
     REQUIRE(!t.isScalar());
     t.setIsScalar(true);
     REQUIRE(t.isScalar());
-    REQUIRE(t.validate().isError());
+    auto status = t.validate();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() == "Tensor 'nonscalar' is marked as a scalar "
+                                   "but does not have a scalar value set");
   }
 }
 
@@ -187,4 +236,75 @@ TEST_CASE("TensorAttr output vs virtual", "[TensorAttr]") {
 
   t.setIsVirtual(true);
   REQUIRE(t.isVirtual());
+}
+
+TEST_CASE("TensorAttr isContiguous and isChannelsLast checks", "[TensorAttr]") {
+  TensorAttr t1;
+  t1.setName("contiguous_tensor")
+      .setDataType(DataType::Float)
+      .setDim({2, 3, 4})
+      .setStride({12, 4, 1});
+  REQUIRE(t1.isContiguous());
+  REQUIRE(!t1.isChannelsLast());
+
+  TensorAttr t2;
+  t2.setName("channels_last_tensor")
+      .setDataType(DataType::Float)
+      .setDim({2, 3, 4})
+      .setStride({12, 1, 3});
+  REQUIRE(!t2.isContiguous());
+  REQUIRE(t2.isChannelsLast());
+}
+
+TEST_CASE("Stride order utils", "[TensorAttr utils]") {
+  // Contiguous (channels-first) stride order
+  REQUIRE(getContiguousStrideOrder(3) == std::vector<size_t>({2, 1, 0}));
+  REQUIRE(getContiguousStrideOrder(4) == std::vector<size_t>({3, 2, 1, 0}));
+  REQUIRE(getContiguousStrideOrder(5) == std::vector<size_t>({4, 3, 2, 1, 0}));
+
+  // Channels-last stride order
+  REQUIRE(getChannelsLastStrideOrder(3) == std::vector<size_t>({2, 0, 1}));
+  REQUIRE(getChannelsLastStrideOrder(4) == std::vector<size_t>({3, 0, 2, 1}));
+  REQUIRE(getChannelsLastStrideOrder(5) ==
+          std::vector<size_t>({4, 0, 3, 2, 1}));
+
+  // Generate stride from dim and stride order
+  REQUIRE(generateStrideFromDim({10, 3, 12, 12}, {3, 0, 2, 1}) ==
+          std::vector<int64_t>({432, 1, 36, 3}));
+  REQUIRE(generateStrideFromDim({10, 3, 12, 12}, {3, 2, 1, 0}) ==
+          std::vector<int64_t>({432, 144, 12, 1}));
+
+  // Ambiguous case (multiple dims of size 1)
+  REQUIRE(generateStrideFromDim({256, 128, 1, 1}, {3, 0, 2, 1}) ==
+          std::vector<int64_t>({128, 1, 128, 128}));
+  REQUIRE(generateStrideFromDim({256, 128, 1, 1}, {3, 2, 1, 0}) ==
+          std::vector<int64_t>({128, 1, 1, 1}));
+}
+
+TEST_CASE("Permute order utils", "[TensorAttr utils]") {
+  // Preserve contiguous permute order
+  REQUIRE(getPreserveContiguousPermuteOrder(1) == std::vector<int64_t>({0}));
+  REQUIRE(getPreserveContiguousPermuteOrder(2) == std::vector<int64_t>({0, 1}));
+  REQUIRE(getPreserveContiguousPermuteOrder(3) ==
+          std::vector<int64_t>({0, 1, 2}));
+  REQUIRE(getPreserveContiguousPermuteOrder(4) ==
+          std::vector<int64_t>({0, 1, 2, 3}));
+  REQUIRE(getPreserveContiguousPermuteOrder(5) ==
+          std::vector<int64_t>({0, 1, 2, 3, 4}));
+
+  // Channels-last to contiguous permute order
+  REQUIRE(getChannelsLastToContiguousPermuteOrder(3) ==
+          std::vector<int64_t>({0, 2, 1}));
+  REQUIRE(getChannelsLastToContiguousPermuteOrder(4) ==
+          std::vector<int64_t>({0, 3, 1, 2}));
+  REQUIRE(getChannelsLastToContiguousPermuteOrder(5) ==
+          std::vector<int64_t>({0, 4, 1, 2, 3}));
+
+  // Contiguous to channels-last permute order
+  REQUIRE(getContiguousToChannelsLastPermuteOrder(3) ==
+          std::vector<int64_t>({0, 2, 1}));
+  REQUIRE(getContiguousToChannelsLastPermuteOrder(4) ==
+          std::vector<int64_t>({0, 2, 3, 1}));
+  REQUIRE(getContiguousToChannelsLastPermuteOrder(5) ==
+          std::vector<int64_t>({0, 2, 3, 4, 1}));
 }

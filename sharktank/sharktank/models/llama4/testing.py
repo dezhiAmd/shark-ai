@@ -48,7 +48,7 @@ def config_to_hugging_face_text_config(config: LlamaModelConfig) -> Llama4TextCo
         torch_dtype=config.dtype,
         attn_temperature_tuning=config.hp.attn_temperature_tuning,
         floor_scale=config.hp.floor_scale,
-        attn_scale=config.hp.attn_scale,
+        attention_scale=config.hp.attention_scale,
         attn_implementation="sdpa",
     )
 
@@ -131,7 +131,6 @@ def make_toy_model_config(dtype: torch.dtype) -> LlamaModelConfig:
 
     attn_head_dim = rope_dimension_count
     block_seq_stride = 13
-    block_count = 4
     expert_feed_forward_length = 29
     return LlamaModelConfig(
         hp=LlamaHParams(
@@ -142,6 +141,7 @@ def make_toy_model_config(dtype: torch.dtype) -> LlamaModelConfig:
             feed_forward_length=23,
             rope_dimension_count=rope_dimension_count,
             rope_freq_base=500000.0,
+            rope_interleave_emb=False,
             yarn_beta_slow=1,
             yarn_beta_fast=4,
             yarn_factor=8,
@@ -160,12 +160,11 @@ def make_toy_model_config(dtype: torch.dtype) -> LlamaModelConfig:
             no_rope_layer_step=4,
             attn_temperature_tuning=True,
             floor_scale=31,
-            attn_scale=0.2,
+            attention_scale=0.2,
         ),
         block_seq_stride=block_seq_stride,
         activation_dtype=dtype,
         attention_dtype=dtype,
-        use_hf=True,
         dtype=dtype,
         use_qk_norm=True,
         attention_chunk_size=37,

@@ -98,7 +98,7 @@ class MockPagePool(PagePool):
         self.config = PagePoolConfig(
             dtype=sfnp.float32,
             alloc_page_count=total_pages,
-            paged_kv_block_size_elements=TEST_PAGE_SIZE,
+            paged_kv_block_size_elements_per_device=[TEST_PAGE_SIZE],
         )
 
     def acquire_free_pages(self, count: int) -> List[PageInfo]:
@@ -129,6 +129,4 @@ def cache(page_pool):
 
 @pytest.fixture(scope="function")
 def cache_ref_count(page_pool):
-    yield BasePagedAttentionCache(
-        page_pool=page_pool, tokens_per_page=TEST_PAGE_SIZE, use_ref_counts=True
-    )
+    yield BasePagedAttentionCache(page_pool=page_pool, tokens_per_page=TEST_PAGE_SIZE)

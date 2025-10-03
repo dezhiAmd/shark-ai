@@ -20,15 +20,33 @@ from os import PathLike
 from dataclasses import asdict, dataclass, field, fields
 import torch
 from transformers import T5Config as T5ConfigHf
+from iree.turbine.aot import DeviceAffinity
 from .config import ModelConfig
 from sharktank.utils import parse_version
+from sharktank.types import Dataset
 from sharktank.types.tensors import serialized_name_to_dtype, dtype_to_serialized_name
 
 if TYPE_CHECKING:
     import transformers
     from sharktank.types import PropertyValueType
 
-__all__ = ["ClipTextConfig", "LlamaHParams", "LlamaModelConfig", "T5Config"]
+__all__ = [
+    "ClipTextConfig",
+    "LlamaHParams",
+    "LlamaModelConfig",
+    "ParallelismConfig",
+    "T5Config",
+    "is_hugging_face_llama3_config",
+]
+
+
+def is_hugging_face_llama3_config(hf_config: dict[str, Any]) -> bool:
+    if "architectures" not in hf_config or "model_type" not in hf_config:
+        return False
+    return (
+        "LlamaForCausalLM" in hf_config["architectures"]
+        and hf_config["model_type"] == "llama"
+    )
 
 
 @dataclass
@@ -51,8 +69,10 @@ class LlamaHParams:
     # The size of the model's vocabulary.
     vocab_size: Optional[int] = None
 
-    vocab_size: int | None = None
-    """TODO: make this non-optional once we don't use artifacts without this value."""
+    # Which blocks share kv cache entries
+    share_kv_schedule: Optional[list[int]] = None
+    # Which layers have global vs windowed context
+    attention_global_layer_schedule: Optional[list[int]] = None
 
     # Deepseek Multi-Latent Attention config
     q_lora_rank: Optional[int] = None
@@ -73,6 +93,7 @@ class LlamaHParams:
     # RoPE config
     rope_dimension_count: Optional[int] = None
     rope_freq_base: Optional[float] = None
+    rope_interleave_emb: bool = False
 
     # MoE config
     expert_count: Optional[int] = None
@@ -105,10 +126,23 @@ class LlamaHParams:
     attn_temperature_tuning: Optional[bool] = None
 
     # Scaling factor applied to attention scores.
-    attn_scale: Optional[float] = None
+    attention_scale: Optional[float] = None
 
     # Scaling factor applied as a floor value in attention computations.
     floor_scale: Optional[int] = None
+
+    # gpt-oss configs
+    sliding_window: int = 0  # 0 = no sliding window, >0 = window size
+    swiglu_limit: Optional[float] = None  # Limit for swiglu activation function
+    use_base_frequency_scaling: bool = False  # Whether to use base^(i/d) frequency scaling for RoPE, applies base frequency YaRN variant
+    topk_then_softmax: bool = (
+        False  # Whether to use topk then softmax MoE routing without expert groups
+    )
+    use_residual_moe: bool = False  # Whether to use residual connection after MoE
+    # FFN processing configuration
+    moe_block_type: str = "DenseFFNMOE"  # DenseFFNMOE, PreGatherFFNMOE
+    use_fused_qkv: bool = False  # Whether to use fused QKV for attention
+    use_moe_swiglu: bool = False  # Whether to use fused SwiGLU for MoE
 
     @staticmethod
     def from_gguf_props(p: dict[str, Any]):
@@ -119,6 +153,7 @@ class LlamaHParams:
         default_rope_freq_base = 500000.0
         default_rope_dimension_count = 128
         attention_head_count = _int_prop(p, f"{name_prefix}.attention.head_count")
+        default_rope_interleave_emb = "schema" in p and p["schema"] == "GGUF"
         rope_dimension_count = _optional_int_prop(
             p, f"{name_prefix}.rope.dimension_count", default_rope_dimension_count
         )
@@ -156,13 +191,16 @@ class LlamaHParams:
             rope_freq_base=_optional_float_prop(
                 p, f"{name_prefix}.rope.freq_base", default_rope_freq_base
             ),
+            rope_interleave_emb=_optional_bool_prop(
+                p, f"{name_prefix}.rope.interleave_emb", default_rope_interleave_emb
+            ),
             no_rope_layer_step=_optional_int_prop(
                 p, f"{name_prefix}.no_rope_layer_step", None
             ),
             attn_temperature_tuning=_optional_bool_prop(
                 p, f"{name_prefix}.attn_temperature_tuning", None
             ),
-            attn_scale=_optional_float_prop(p, f"{name_prefix}.attn_scale", None),
+            attention_scale=_optional_float_prop(p, f"{name_prefix}.attn_scale", None),
             floor_scale=_optional_int_prop(p, f"{name_prefix}.floor_scale", None),
             **custom_config,
         )
@@ -210,6 +248,8 @@ class LlamaHParams:
             res[f"{self.model_arch}.rope.dimension_count"] = self.rope_dimension_count
         if self.rope_freq_base is not None:
             res[f"{self.model_arch}.rope.freq_base"] = self.rope_freq_base
+        if self.rope_interleave_emb is not None:
+            res[f"{self.model_arch}.rope.interleave_emb"] = self.rope_interleave_emb
         if self.expert_feed_forward_length is not None:
             res[
                 f"{self.model_arch}.expert_feed_forward_length"
@@ -233,14 +273,24 @@ class LlamaHParams:
             ] = self.attn_temperature_tuning
         if self.floor_scale is not None:
             res[f"{self.model_arch}.floor_scale"] = self.floor_scale
-        if self.attn_scale is not None:
-            res[f"{self.model_arch}.attn_scale"] = self.attn_scale
+        if self.attention_scale is not None:
+            res[f"{self.model_arch}.attn_scale"] = self.attention_scale
+
+        if self.sliding_window > 0:
+            res[f"{self.model_arch}.sliding_window"] = self.sliding_window
+        if self.swiglu_limit is not None:
+            res[f"{self.model_arch}.swiglu_limit"] = self.swiglu_limit
 
         return res
 
 
 def get_custom_configs(p: dict[str, Any], name_prefix: str):
     res = defaultdict(lambda: None)
+
+    optional_keys = ["attention.global_layer_schedule", "share_kv_schedule"]
+    for key in optional_keys:
+        if f"{name_prefix}.{key}" in p.keys():
+            res[key.replace(".", "_")] = p[f"{name_prefix}.{key}"]
 
     if name_prefix == "grok":
         res["attention_softcap"] = 30.0
@@ -285,6 +335,20 @@ def get_custom_configs(p: dict[str, Any], name_prefix: str):
         res["expert_shared_feed_forward_length"] = _int_prop(
             p, f"{name_prefix}.expert_shared_feed_forward_length"
         )
+
+    if name_prefix == "gpt-oss":
+        res["sliding_window"] = _optional_int_prop(
+            p, f"{name_prefix}.sliding_window", 128
+        )  # Default for gpt-oss
+        res["swiglu_limit"] = _float_prop(p, f"{name_prefix}.swiglu_limit")
+        res["use_moe_swiglu"] = True
+        res["moe_block_type"] = "PreGatherFFNMOE"
+        res["use_residual_moe"] = True
+        res["use_base_frequency_scaling"] = True
+        res["use_fused_qkv"] = True
+        res["topk_then_softmax"] = True
+        res["use_decomposed_attention"] = True
+        res["rope_interleave_emb"] = False
 
     return res
 
@@ -356,6 +420,106 @@ def _optional_int_prop(
 
 
 @dataclass
+class ParallelismConfig:
+    # Mapping between a transformer block and the pipeline it's a part of.
+    block_to_pipeline_map: tuple[int, ...] | None = None
+
+    # Mapping between a pipeline and the IREE devices it's executed on.
+    pipeline_to_device_map: tuple[tuple[int, ...], ...] | None = None
+
+    @staticmethod
+    def default_config(
+        *, block_count: int, pp: int = 1, tp: int = 1
+    ) -> "ParallelismConfig":
+        assert tp == 1, "Tensor parallelism not yet supported."
+
+        from sharktank.types.pipelining import (
+            distribute_blocks_uniformly_over_pipeline_stages,
+        )
+
+        (
+            block_to_pipeline_map,
+            pipeline_to_device_map,
+        ) = distribute_blocks_uniformly_over_pipeline_stages(block_count, pp, tp)
+        return ParallelismConfig(block_to_pipeline_map, pipeline_to_device_map)
+
+    @property
+    def num_blocks_per_pipeline(self) -> List[int]:
+        if self.block_to_pipeline_map is None:
+            raise ValueError(
+                "block_to_pipeline_map must be set to use num_blocks_per_pipeline"
+            )
+        counts = [0] * self.pipeline_size
+        for p in self.block_to_pipeline_map:
+            counts[p] += 1
+        return counts
+
+    @property
+    def pipeline_size(self) -> int:
+        return (
+            1
+            if self.pipeline_to_device_map is None
+            else len(self.pipeline_to_device_map)
+        )
+
+    @property
+    def tensor_parallelism_size(self) -> int:
+        """
+        How many devices are involved for tensor parallel sharding.
+        If greater than 1, the model will expect sharded model parameters and function
+        arguments.
+        """
+        return len(self.devices_for_pipeline(0))
+
+    def device_affinity_for_pipeline(self, pipeline: int) -> DeviceAffinity:
+        devices = self.devices_for_pipeline(pipeline)
+        assert len(devices) == 1, "Tensor parallelism not supported"
+        return DeviceAffinity(devices[0])
+
+    def first_block_for_pipeline(self, pipeline: int) -> int:
+        if self.block_to_pipeline_map is None:
+            if pipeline == 0:
+                return 0
+            raise ValueError("No pipeline mapping, only pipeline 0 is valid.")
+        return self.block_to_pipeline_map.index(pipeline)
+
+    def first_block_in_pipeline_for_block(self, block: int) -> int:
+        if self.block_to_pipeline_map is None:
+            return 0
+        pipeline = self.pipeline_for_block(block)
+        return self.block_to_pipeline_map.index(pipeline)
+
+    def pipeline_for_block(self, block: int) -> int:
+        if self.block_to_pipeline_map is None:
+            return 0
+        return self.block_to_pipeline_map[block]
+
+    def devices_for_pipeline(self, pipeline: int) -> tuple[int, ...]:
+        if self.pipeline_to_device_map is None:
+            return (0,)
+        return self.pipeline_to_device_map[pipeline]
+
+    def to_properties(self) -> "PropertyValueType":
+        res: dict[str, Any] = {}
+        res["block_to_pipeline_map"] = self.block_to_pipeline_map
+        res["pipeline_to_device_map"] = self.pipeline_to_device_map
+        return res
+
+    @staticmethod
+    def from_properties(properties: "PropertyValueType") -> "ParallelismConfig":
+        kwargs = dict(properties)
+        fields_name_set = set(field.name for field in fields(ParallelismConfig))
+        kwargs = {k: v for k, v in kwargs.items() if k in fields_name_set}
+
+        if len(kwargs) != 0:
+            return ParallelismConfig(**kwargs)
+
+        return ParallelismConfig.default_config(
+            block_count=LlamaHParams.from_gguf_props(properties).block_count
+        )
+
+
+@dataclass
 class LlamaModelConfig:
     hp: LlamaHParams
 
@@ -381,36 +545,17 @@ class LlamaModelConfig:
     # fake quant determines the mode the Layer Thetas operate w.r.t quantized tensors.
     fake_quant: bool = True
 
-    # How many devices are involved for tensor parallel sharding.
-    # If greater than 1, the model will expect sharded model parameters and function
-    # arguments.
-    tensor_parallelism_size: int = 1
-
-    # How many groups of (roughly) uniform size to
-    # If greater than 1, the model will re-wrap all non-sharded tensors as sharded over 1 device.
-    pipeline_parallelism_size: int = 1
-
-    # Mapping between a transformer block and the corresponding pipeline
-    block_to_pipeline_map: tuple[int, ...] = None
-
-    # Mapping between a pipeline and the corresponding devices
-    pipeline_to_device_map: tuple[tuple[int, ...], ...] = None
+    # Configuration info for pipeline and tensor parallelism.
+    parallelism_config: ParallelismConfig = None
 
     # Which attention kernel to use.
     attention_kernel: str = "torch"
 
-    # Indicates if running with HuggingFace implementation and ensures
-    # numerical equivalency to HuggingFace's LLaMa if true (by modifying
-    # rotary embedding).
-    use_hf: bool = False
+    # Which matmul kernel to use.
+    matmul_kernel: str = "*"
 
-    # If true, then the model may pre-initialize certain tables during
-    # init. This can be better for eager execution but when capturing a program,
-    # it is often better to preserve the calculation explicitly and rely on
-    # the compiler to transform it to an initialization time step. This can
-    # be the difference of many gigabytes of static data being embedded in
-    # the program and not.
-    static_tables: bool = True
+    # Whether to use shuffled kernels for quantized operations.
+    use_shuffled_kernel: bool = False
 
     # A list of layer indices where chunked attention is applied instead of full attention.
     chunked_attention_layers: Optional[set[int]] = None
@@ -430,7 +575,28 @@ class LlamaModelConfig:
     # The default data type to use for model parameters and computations.
     dtype: Optional[torch.dtype] = None
 
+    @property
+    def pipeline_parallelism_size(self) -> int:
+        return self.parallelism_config.pipeline_size
+
+    @property
+    def tensor_parallelism_size(self) -> int:
+        return self.parallelism_config.tensor_parallelism_size
+
+    @property
+    def pipeline_to_device_map(self) -> tuple[tuple[int, ...], ...] | None:
+        return self.parallelism_config.pipeline_to_device_map
+
+    @property
+    def block_to_pipeline_map(self) -> tuple[int, ...] | None:
+        return self.parallelism_config.block_to_pipeline_map
+
     def __post_init__(self):
+        if self.parallelism_config is None:
+            self.parallelism_config = ParallelismConfig.default_config(
+                block_count=self.hp.block_count
+            )
+
         if self.moe_layers is None:
             if self.hp.interleave_moe_layer_step is None:
                 self.moe_layers = []
@@ -468,17 +634,14 @@ class LlamaModelConfig:
         res["attention_dtype"] = dtype_to_serialized_name(self.attention_dtype)
         res["fake_quant"] = self.fake_quant
         res["tensor_parallelism_size"] = self.tensor_parallelism_size
-        res["pipeline_parallelism_size"] = self.pipeline_parallelism_size
         res["block_to_pipeline_map"] = self.block_to_pipeline_map
         res["pipeline_to_device_map"] = self.pipeline_to_device_map
         res["attention_kernel"] = self.attention_kernel
-        res["use_hf"] = self.use_hf
-        res["static_tables"] = self.static_tables
         res["use_qk_norm"] = self.use_qk_norm
         res["attention_chunk_size"] = self.attention_chunk_size
         if self.chunked_attention_layers is not None:
             res["chunked_attention_layers"] = list(self.chunked_attention_layers)
-
+        res["parallelism_config"] = self.parallelism_config.to_properties()
         return res
 
     @staticmethod
@@ -487,6 +650,7 @@ class LlamaModelConfig:
         fields_name_set = set(field.name for field in fields(LlamaModelConfig))
         kwargs = {k: v for k, v in kwargs.items() if k in fields_name_set}
         kwargs["hp"] = LlamaHParams.from_gguf_props(properties)
+        kwargs["parallelism_config"] = ParallelismConfig.from_properties(properties)
         if "kv_cache_dtype" in kwargs:
             kwargs["kv_cache_dtype"] = serialized_name_to_dtype(
                 kwargs["kv_cache_dtype"]
@@ -502,6 +666,76 @@ class LlamaModelConfig:
         if "chunked_attention_layers" in kwargs:
             kwargs["chunked_attention_layers"] = set(kwargs["chunked_attention_layers"])
         return LlamaModelConfig(**kwargs)
+
+    @staticmethod
+    def from_dataset(dataset: Dataset, **kwargs):
+        hparams = LlamaHParams.from_gguf_props(dataset.properties)
+
+        default_dtype = torch.float16
+        attn_k_theta = dataset.root_theta.optional_tensor("blk", 0, "attn_k")
+        if attn_k_theta is not None and "q_output" in attn_k_theta:
+            q_output = attn_k_theta["q_output"]
+            default_dtype = q_output.dtype
+
+        if "kv_cache_dtype" not in kwargs or kwargs["kv_cache_dtype"] is None:
+            kwargs["kv_cache_dtype"] = default_dtype
+
+        if "attention_dtype" not in kwargs or kwargs["attention_dtype"] is None:
+            kwargs["attention_dtype"] = default_dtype
+
+        return LlamaModelConfig(hp=hparams, **kwargs)
+
+    @staticmethod
+    def from_hugging_face_config(hf_config: dict[str, Any]) -> "LlamaModelConfig":
+        if is_hugging_face_llama3_config(hf_config):
+            return LlamaModelConfig.from_hugging_face_llama3_config(hf_config)
+
+        raise ValueError(
+            f"Could not convert Hugging Face config to Sharktank LlamaModelConfig. No known conversion for config\n{hf_config}"
+        )
+
+    @staticmethod
+    def from_hugging_face_llama3_config(
+        hf_config: dict[str, Any]
+    ) -> "LlamaModelConfig":
+        assert is_hugging_face_llama3_config(hf_config)
+
+        context_length = hf_config.get("max_position_embeddings", 2048)
+        embedding_length = hf_config.get("hidden_size", 4096)
+        block_count = hf_config.get("num_hidden_layers", 32)
+        feed_forward_length = hf_config.get("intermediate_size", 11008)
+        attention_head_count = hf_config.get("num_attention_heads", 32)
+        attn_head_dim = hf_config.get("head_dim", 128)
+        attention_layer_norm_rms_epsilon = hf_config.get("rms_norm_eps", 1e-06)
+        attention_head_count_kv = hf_config.get("num_key_value_heads", 32)
+        vocab_size = hf_config.get("vocab_size", 32000)
+        rope_dimension_count = attn_head_dim
+        rope_freq_base = hf_config.get("rope_theta", 10000.0)
+        hp = LlamaHParams(
+            model_arch="llama",
+            context_length=context_length,
+            embedding_length=embedding_length,
+            block_count=block_count,
+            feed_forward_length=feed_forward_length,
+            attention_head_count=attention_head_count,
+            attn_head_dim=attn_head_dim,
+            attention_layer_norm_rms_epsilon=attention_layer_norm_rms_epsilon,
+            attention_head_count_kv=attention_head_count_kv,
+            vocab_size=vocab_size,
+            rope_dimension_count=rope_dimension_count,
+            rope_freq_base=rope_freq_base,
+        )
+
+        # The default in HF transformers is float32.
+        dtype = getattr(torch, hf_config.get("torch_dtype", "float32"))
+        activation_dtype = dtype
+        attention_dtype = dtype
+        return LlamaModelConfig(
+            hp=hp,
+            activation_dtype=activation_dtype,
+            attention_dtype=attention_dtype,
+            dtype=dtype,
+        )
 
 
 @dataclass

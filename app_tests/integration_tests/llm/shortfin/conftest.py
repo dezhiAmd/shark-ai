@@ -1,6 +1,7 @@
 """Test fixtures and configurations."""
 
 import hashlib
+import os
 import pytest
 from pathlib import Path
 from tokenizers import Tokenizer, Encoding
@@ -9,6 +10,7 @@ from ..model_management import (
     ModelProcessor,
     ModelArtifacts,
     ModelConfig,
+    ModelSource,
 )
 from ..server_management import ServerInstance, ServerConfig
 
@@ -34,13 +36,39 @@ def test_device(request):
 
 
 @pytest.fixture(scope="session")
-def model_artifacts(tmp_path_factory, request, test_device):
+def irpa_path():
+    path = os.environ.get("IRPA_PATH")
+    return path
+
+
+@pytest.fixture(scope="session")
+def tokenizer_path():
+    path = os.environ.get("TOKENIZER_PATH")
+    return path
+
+
+@pytest.fixture(scope="session")
+def model_artifacts(tmp_path_factory, request, test_device, irpa_path, tokenizer_path):
     """Prepares model artifacts in a cached directory."""
     model_config: ModelConfig = request.param
     settings_key = test_device
 
     if test_device == "cpu" and model_config.tensor_parallelism_size is not None:
         pytest.skip("Skipping CPU tests with tensor parallelism")
+
+    if test_device == "cpu" and model_config.has_prefill_position is not None:
+        pytest.skip(
+            reason="Skipping CPU tests with prefill position due to compilation error"
+        )
+
+    if model_config.source == ModelSource.LOCAL:
+        if irpa_path is None:
+            pytest.fail("IRPA path must be specified for LOCAL models")
+        if tokenizer_path is None:
+            pytest.fail("Tokenizer path must be specified for LOCAL models")
+
+        model_config.irpa_path = Path(irpa_path)
+        model_config.tokenizer_path = Path(tokenizer_path)
 
     if (
         model_config.tensor_parallelism_size is not None
@@ -61,6 +89,7 @@ def model_artifacts(tmp_path_factory, request, test_device):
             mlir_path=model_dir / "model.mlir",
             vmfb_path=model_dir / "model.vmfb",
             config_path=model_dir / "config.json",
+            model_config=model_config,
         )
 
     # Process model and create artifacts
@@ -77,8 +106,8 @@ def server(model_artifacts, request):
         artifacts=model_artifacts,
         device_settings=model_config.device_settings,
         prefix_sharing_algorithm=request.param.get("prefix_sharing", "none"),
-        use_beam_search=request.param.get("use_beam_search", False),
         num_beams=request.param.get("num_beams", 1),
+        chunk_block_size=request.param.get("chunk_block_size", None),
     )
 
     server_instance = ServerInstance(server_config)
@@ -90,8 +119,10 @@ def server(model_artifacts, request):
     )
     yield process, port, config
 
-    process.terminate()
-    process.wait()
+    # Teardown, if process is still running
+    if process.poll() is None:
+        process.terminate()
+        process.wait()
 
 
 @pytest.fixture(scope="module")

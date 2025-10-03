@@ -7,14 +7,24 @@
 import pytest
 import torch
 
-from sharktank.types import DynamicFp4BlockQuantizer, Slice
+from iree.turbine.aot import ExternalTensorTrait
+from pathlib import Path
+from sharktank.types import (
+    Dataset,
+    DynamicFp4BlockQuantizer,
+    QuantizerTensor,
+    Slice,
+    Theta,
+)
+from sharktank.types.layouts import BlockScaledFp4Layout
 from sharktank.utils.testing import assert_tensor_close
+from sharktank.utils import torch_device_equal
 from sharktank import ops
 
 
 class TestCat_BlockScaledFp4Layout:
     n_values_per_byte = 2
-    block_size = n_values_per_byte * 3
+    block_size = 32
 
     @pytest.mark.parametrize(
         "dim",
@@ -57,7 +67,7 @@ class TestCat_BlockScaledFp4Layout:
 
 class TestExtractSlice_BlockScaledFp4Layout:
     n_values_per_byte = 2
-    block_size = n_values_per_byte * 3
+    block_size = 32
 
     @pytest.mark.parametrize(
         "slice_",
@@ -105,9 +115,81 @@ class TestExtractSlice_BlockScaledFp4Layout:
         assert_tensor_close(actual_result, expected_result, rtol=0, atol=0)
 
 
+class TestIO:
+    def test_external_tensor_trait_of_block_scaled_fp4_layout_legacy_scale_without_trailing_singleton_dimension(
+        self, deterministic_random_seed, tmp_path: Path
+    ):
+        dtype = torch.float32
+        tensor = torch.rand([2, 4], dtype=dtype)
+        quantizer = DynamicFp4BlockQuantizer(block_size=4, use_sharktank_kernel=False)
+        quantized_tensor = ops.quantize(tensor, quantizer)
+
+        # Change to legacy shape.
+        quantized_tensor.layout.d = quantized_tensor.layout.d.squeeze(-1)
+
+        theta = Theta({"a": quantized_tensor})
+        theta.rename_tensors_to_paths()
+        dataset = Dataset(properties={}, root_theta=theta)
+        irpa_path = tmp_path / "dataset.irpa"
+        dataset.save(irpa_path)
+
+        loaded_dataset = Dataset.load(irpa_path)
+        external_tensor_trait = ExternalTensorTrait.get(
+            loaded_dataset.root_theta("a").layout.d
+        )
+        assert external_tensor_trait != None
+        assert external_tensor_trait.external_name == "a:d"
+
+
+class TestMatmul:
+    @pytest.mark.parametrize(
+        "dtype, quantization_block_size, quantizer",
+        [
+            (
+                torch.float32,
+                32,
+                DynamicFp4BlockQuantizer(
+                    dtype=torch.float32, block_size=32, use_fe8m0_scale=True
+                ),
+            ),
+            (
+                torch.float32,
+                32,
+                DynamicFp4BlockQuantizer(
+                    dtype=torch.float32, block_size=32, use_fe8m0_scale=False
+                ),
+            ),
+        ],
+    )
+    def test_eager_matmul(
+        self,
+        deterministic_random_seed,
+        dtype: torch.dtype,
+        quantization_block_size: int,
+        quantizer: QuantizerTensor,
+    ):
+        bs = 2
+        m = 5
+        n = 2 * quantization_block_size
+        k = 3 * quantization_block_size
+
+        lhs = torch.rand(size=[bs, m, k], dtype=dtype)
+        rhs = torch.rand(size=[k, n], dtype=dtype)
+
+        rhs_quantized = quantizer.quantize(rhs)
+        lhs_quantized = quantizer.quantize(lhs)
+
+        rhs_dequantized = rhs_quantized.unpack().dequant(dtype=dtype)
+        lhs_dequantized = lhs_quantized.unpack().dequant(dtype=dtype)
+        expected = torch.matmul(lhs_dequantized, rhs_dequantized)
+
+        actual = ops.matmul(lhs_quantized, rhs_quantized)
+        assert_tensor_close(actual, expected)
+
+
 class TestSplit_BlockScaledFp4Layout:
     n_values_per_byte = 2
-    block_size = n_values_per_byte * 3
+    block_size = 32
 
     @pytest.mark.parametrize(
         "split_size, dim",
@@ -145,3 +227,56 @@ class TestSplit_BlockScaledFp4Layout:
         expected_result = dequantized_input.split(split_size, dim)
         actual_result = ops.split(quantized_input, split_size, dim)
         assert_tensor_close(actual_result, expected_result, rtol=0, atol=0)
+
+
+class TestTo:
+    block_size = 32
+
+    @pytest.mark.parametrize(
+        "source_device, target_device",
+        [
+            (torch.device("cpu"), torch.device("cpu")),
+            pytest.param(
+                torch.device("cuda"),
+                torch.device("cpu"),
+                marks=pytest.mark.skipif(
+                    not torch.cuda.is_available(), reason="Needs CUDA/HIP device."
+                ),
+            ),
+            pytest.param(
+                torch.device("cpu"),
+                torch.device("cuda"),
+                marks=pytest.mark.skipif(
+                    not torch.cuda.is_available(), reason="Needs CUDA/HIP device."
+                ),
+            ),
+        ],
+    )
+    def test_to_device_BlockScaledFp4Layout(
+        self,
+        deterministic_random_seed,
+        source_device: torch.device,
+        target_device: torch.device,
+    ):
+        dequantized_dtype = torch.float32
+        quantizer = DynamicFp4BlockQuantizer(
+            dtype=torch.float32,
+            block_size=self.block_size,
+            use_fe8m0_scale=True,
+        )
+        dequantized_input = torch.zeros(
+            [1, 2, quantizer.block_size * 3],
+            dtype=dequantized_dtype,
+            device=source_device,
+        )
+        quantized_input = quantizer.quantize(dequantized_input)
+
+        method_result = quantized_input.to(device=target_device)
+        layout: BlockScaledFp4Layout = method_result.to_planar().layout
+        for plane_tensor in layout.planes.values():
+            assert torch_device_equal(plane_tensor.device, target_device)
+
+        ops_result = ops.to(quantized_input, device=target_device)
+        layout: BlockScaledFp4Layout = ops_result.to_planar().layout
+        for plane_tensor in layout.planes.values():
+            assert torch_device_equal(plane_tensor.device, target_device)

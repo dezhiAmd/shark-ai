@@ -10,6 +10,7 @@ Usage: python -m pytest common_test.py
 
 import pytest
 from sharktuner import common
+import time
 
 from iree.compiler import ir  # type: ignore
 from iree.compiler.dialects import iree_gpu  # type: ignore
@@ -86,8 +87,7 @@ def test_get_pipeline_config(tuner_ctx: common.TunerContext) -> None:
         mma_kind=mma_attr,
         workgroup=[4, 8, 0],
         reduction=[0, 0, 16],
-        subgroup_m_count=1,
-        subgroup_n_count=1,
+        subgroup_basis=[[1, 1, 1], [0, 1, 2]],
     )
     pipeline_attr = iree_codegen.DispatchLoweringPassPipelineAttr.get(
         iree_codegen.DispatchLoweringPassPipeline.LLVMGPUVectorDistribute
@@ -155,13 +155,12 @@ def test_get_lowering_config(tuner_ctx: common.TunerContext) -> None:
         tuner_ctx=tuner_ctx,
         workgroup=[4, 8, 0],
         reduction=[0, 0, 16],
-        subgroup_m_count=1,
-        subgroup_n_count=1,
+        subgroup_basis=[[1, 1, 1], [0, 1, 2]],
     )
 
     assert (
         str(lowering_config)
-        == "#iree_gpu.lowering_config<{reduction = [0, 0, 16], subgroup_m_count = 1 : i64, subgroup_n_count = 1 : i64, workgroup = [4, 8, 0]}>"
+        == "#iree_gpu.lowering_config<{reduction = [0, 0, 16], subgroup_basis = [[1, 1, 1], [0, 1, 2]], workgroup = [4, 8, 0]}>"
     )
 
     pipeline_attr = iree_codegen.DispatchLoweringPassPipelineAttr.get(
@@ -177,7 +176,7 @@ def test_get_lowering_config(tuner_ctx: common.TunerContext) -> None:
     )
 
     assert compilation_info.lowering_config.mma_kind is None
-    assert compilation_info.lowering_config.subgroup_count_mn == (1, 1)
+    assert compilation_info.lowering_config.subgroup_basis == ([1, 1, 1], [0, 1, 2])
 
 
 def test_combine_tuning_specs(tuner_ctx: common.TunerContext) -> None:
@@ -430,3 +429,23 @@ def test_determine_td_specs_to_link(
     assert td_specs_to_link == [starter_td_spec, current_td_spec]
     assert "match_baz" not in caplog.text
     assert "already been tuned" not in caplog.text
+
+
+def test_time_budget():
+    time_budget = common.TimeBudget.for_minutes(-5)
+    assert time_budget == None
+    time_budget = common.TimeBudget.for_minutes(0)
+    assert time_budget == None
+
+    base = 1.234
+    time_budget = common.TimeBudget.for_minutes(
+        minutes=0.1, now=base
+    )  # Set a 6s timer from timestamp `base`.
+    assert time_budget != None
+    assert time_budget.remaining(base) > 1
+    assert time_budget.expired(base) == False
+
+    assert time_budget.remaining(base + 3) > 2
+    assert time_budget.expired(base + 3) == False
+    assert time_budget.remaining(base + 6) == 0
+    assert time_budget.expired(base + 6) == True

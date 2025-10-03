@@ -20,8 +20,8 @@ from typing import List, Optional
 
 from dataclasses_json import dataclass_json, Undefined
 
-from .token_selection_strategy.config import DecodeConfig
-from .token_selection_strategy.config import LogitsNormalization
+from .decode_config import DecodeConfig
+from .decode_config import LogitsNormalization
 
 import shortfin.array as sfnp
 
@@ -139,6 +139,9 @@ class ModelParams:
     # Similarly, batch sizes that the decode stage is compiled for.
     decode_batch_sizes: list[int]
 
+    # Whether the model was exported with `start_positions` for prefill.
+    has_prefill_position: bool = False
+
     # Name of the IREE module implementing the model.
     module_name: str = "module"
 
@@ -241,9 +244,9 @@ class ServerParams:
 
     decode_config: DecodeConfig | None = None
 
-    use_new_decoder: bool = False
-
     use_native_impls: bool = False
+
+    chunk_block_size: Optional[int] = None
 
     # Device configuration
     device_ids: list[str] = field(default_factory=list)

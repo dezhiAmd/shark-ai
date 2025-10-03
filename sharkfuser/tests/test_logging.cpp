@@ -4,38 +4,39 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include <fusili.h>
+#include <fusilli.h>
 
+#include <cassert>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <sstream>
 
-using namespace fusili;
+using namespace fusilli;
 
 TEST_CASE("ConditionalStreamer conditioned on isLoggingEnabled", "[logging]") {
-  // Create a string stream to capture the output
+  // Create a string stream to capture the output.
   std::ostringstream oss;
   ConditionalStreamer logger(oss);
 
-  // When env variable is set to 0, disable logging
+  // When env variable is set to 0, disable logging.
   isLoggingEnabled() = false;
-  // ^ force mimics the effect of setenv("FUSILI_LOG_INFO", "0", 1);
+  // ^ force mimics the effect of setenv("FUSILLI_LOG_INFO", "0", 1);
   oss.str("");
   logger << "Hello World";
   REQUIRE(oss.str().empty());
   REQUIRE(!isLoggingEnabled());
 
-  // When env variable is set to 1, enable logging
+  // When env variable is set to 1, enable logging.
   isLoggingEnabled() = true;
-  // ^ force mimics the effect of setenv("FUSILI_LOG_INFO", "1", 1);
+  // ^ force mimics the effect of setenv("FUSILLI_LOG_INFO", "1", 1);
   oss.str("");
   logger << "Hello World";
   REQUIRE(oss.str() == "Hello World");
   REQUIRE(isLoggingEnabled());
 
-  // When env variable is not set, disable logging
+  // When env variable is not set, disable logging.
   isLoggingEnabled() = false;
-  // ^ force mimics the effect of unsetenv("FUSILI_LOG_INFO");
+  // ^ force mimics the effect of unsetenv("FUSILLI_LOG_INFO");
   oss.str("");
   logger << "Hello World";
   REQUIRE(oss.str().empty());
@@ -43,36 +44,36 @@ TEST_CASE("ConditionalStreamer conditioned on isLoggingEnabled", "[logging]") {
 }
 
 // This test is disabled because getStream() statically initializes
-// the stream ref picking the first snapshot of FUSILI_LOG_FILE
+// the stream ref picking the first snapshot of FUSILLI_LOG_FILE
 // env variable. So subsequent tests that change the env variable (in
 // the same process) will not affect the stream returned by getStream().
 TEST_CASE("getStream stdout mode", "[logging][.]") {
-  setenv("FUSILI_LOG_FILE", "stdout", 1);
+  setenv("FUSILLI_LOG_FILE", "stdout", 1);
   std::ostream &stream = getStream();
   REQUIRE(&stream == &std::cout);
 
-  unsetenv("FUSILI_LOG_FILE");
+  unsetenv("FUSILLI_LOG_FILE");
 }
 
 // This test is disabled because getStream() statically initializes
-// the stream ref picking the first snapshot of FUSILI_LOG_FILE
+// the stream ref picking the first snapshot of FUSILLI_LOG_FILE
 // env variable. So subsequent tests that change the env variable (in
 // the same process) will not affect the stream returned by getStream().
 TEST_CASE("getStream stderr mode", "[logging][.]") {
-  setenv("FUSILI_LOG_FILE", "stderr", 1);
+  setenv("FUSILLI_LOG_FILE", "stderr", 1);
   std::ostream &stream = getStream();
   REQUIRE(&stream == &std::cerr);
 
-  unsetenv("FUSILI_LOG_FILE");
+  unsetenv("FUSILLI_LOG_FILE");
 }
 
 // This test is disabled because getStream() statically initializes
-// the stream ref picking the first snapshot of FUSILI_LOG_FILE
+// the stream ref picking the first snapshot of FUSILLI_LOG_FILE
 // env variable. So subsequent tests that change the env variable (in
 // the same process) will not affect the stream returned by getStream().
 TEST_CASE("getStream file mode", "[logging][.]") {
-  const char *test_file = "/tmp/test_fusili_log.txt";
-  setenv("FUSILI_LOG_FILE", test_file, 1);
+  const char *test_file = "/tmp/test_fusilli_log.txt";
+  setenv("FUSILLI_LOG_FILE", test_file, 1);
   std::ostream &stream = getStream();
   REQUIRE(&stream != &std::cout);
   REQUIRE(&stream != &std::cerr);
@@ -80,8 +81,8 @@ TEST_CASE("getStream file mode", "[logging][.]") {
   // a file stream and not cout / cerr.
   REQUIRE(dynamic_cast<std::ofstream *>(&stream));
 
-  // Cleanup
-  unsetenv("FUSILI_LOG_FILE");
+  // Cleanup.
+  unsetenv("FUSILLI_LOG_FILE");
   std::remove(test_file);
 }
 
@@ -91,8 +92,8 @@ TEST_CASE("error_t and ErrorCode operators and methods", "[logging]") {
     REQUIRE(err.code == ErrorCode::OK);
     REQUIRE(err.getCode() == ErrorCode::OK);
     REQUIRE(err.getMessage() == "");
-    REQUIRE(err.isOk());
-    REQUIRE(!err.isError());
+    REQUIRE(isOk(err));
+    REQUIRE(!isError(err));
     REQUIRE(err == ErrorCode::OK);
   }
 
@@ -101,8 +102,8 @@ TEST_CASE("error_t and ErrorCode operators and methods", "[logging]") {
     REQUIRE(err.code == ErrorCode::AttributeNotSet);
     REQUIRE(err.getCode() == ErrorCode::AttributeNotSet);
     REQUIRE(err.getMessage() == "missing attribute");
-    REQUIRE(!err.isOk());
-    REQUIRE(err.isError());
+    REQUIRE(!isOk(err));
+    REQUIRE(isError(err));
     REQUIRE(err == ErrorCode::AttributeNotSet);
   }
 
@@ -114,7 +115,8 @@ TEST_CASE("error_t and ErrorCode operators and methods", "[logging]") {
     oss << ErrorCode::AttributeNotSet;
     REQUIRE(oss.str() == "ATTRIBUTE_NOT_SET");
     oss.str("");
-    oss << static_cast<ErrorCode>(9999); // Unknown code
+    // Unknown code.
+    oss << static_cast<ErrorCode>(9999);
     REQUIRE(oss.str() == "UNKNOWN_ERROR_CODE");
   }
 
@@ -122,7 +124,7 @@ TEST_CASE("error_t and ErrorCode operators and methods", "[logging]") {
     ErrorObject err(ErrorCode::InvalidAttribute, "bad attr");
     std::ostringstream oss;
     oss << err;
-    // Should contain both code and message
+    // Should contain both code and message.
     REQUIRE(oss.str().find("INVALID_ATTRIBUTE") != std::string::npos);
     REQUIRE(oss.str().find("bad attr") != std::string::npos);
   }
@@ -164,33 +166,33 @@ TEST_CASE("ErrorOr construction", "[logging][erroror]") {
   }
 
   SECTION("Move construction") {
-    { // Different types value case
+    { // Different types value case.
       ErrorOr<const char *> source = ok("hello");
       ErrorOr<std::string> destination = std::move(source);
       REQUIRE(isOk(destination));
       REQUIRE(*destination == "hello");
     }
-    { // Different types error case
+    { // Different types error case.
       ErrorOr<const char *> source =
           error(ErrorCode::NotImplemented, "test case");
       ErrorOr<std::string> destination = std::move(source);
       ErrorObject err = destination; // Convert to ErrorObject
-      REQUIRE(err.isError());
+      REQUIRE(isError(err));
       REQUIRE(err.getCode() == ErrorCode::NotImplemented);
       REQUIRE(err.getMessage() == "test case");
     }
-    { // Same types value case
+    { // Same types value case.
       ErrorOr<std::string> source = ok("hello");
       ErrorOr<std::string> destination = std::move(source);
       REQUIRE(isOk(destination));
       REQUIRE(*destination == "hello");
     }
-    { // Same types error case
+    { // Same types error case.
       ErrorOr<std::string> source =
           error(ErrorCode::NotImplemented, "test case");
       ErrorOr<std::string> destination = std::move(source);
       ErrorObject err = destination; // Convert to ErrorObject
-      REQUIRE(err.isError());
+      REQUIRE(isError(err));
       REQUIRE(err.getCode() == ErrorCode::NotImplemented);
       REQUIRE(err.getMessage() == "test case");
     }
@@ -221,7 +223,7 @@ TEST_CASE("ErrorOr conversion to ErrorObject", "[logging][erroror]") {
   SECTION("Success case") {
     ErrorOr<int> result = ok(42);
     ErrorObject err = result;
-    REQUIRE(err.isOk());
+    REQUIRE(isOk(err));
     REQUIRE(err.getCode() == ErrorCode::OK);
     REQUIRE(err.getMessage().empty());
   }
@@ -229,46 +231,49 @@ TEST_CASE("ErrorOr conversion to ErrorObject", "[logging][erroror]") {
   SECTION("Error case") {
     ErrorOr<int> result = error(ErrorCode::TensorNotFound, "tensor missing");
     ErrorObject err = result;
-    REQUIRE(err.isError());
+    REQUIRE(isError(err));
     REQUIRE(err.getCode() == ErrorCode::TensorNotFound);
     REQUIRE(err.getMessage() == "tensor missing");
   }
 }
 
-TEST_CASE("ErrorOr <> ErrorOr error propagation", "[logging][erroror]") {
-  auto failingFunction = []() -> ErrorOr<int> {
+// Test error propagation when a function returning an `ErrorOr` type is called
+// by another function returning `ErrorOr` type.
+TEST_CASE("ErrorOr -> ErrorOr error propagation", "[logging][erroror]") {
+  int failingFunctionCallCount = 0;
+  auto failingFunction = [&failingFunctionCallCount]() -> ErrorOr<int> {
+    failingFunctionCallCount++;
     return error(ErrorCode::NotImplemented, "not implemented");
   };
 
-  auto successFunction = []() -> ErrorOr<int> { return ok(42); };
+  int successFunctionCallCount = 0;
+  auto successFunction = [&successFunctionCallCount]() -> ErrorOr<int> {
+    successFunctionCallCount++;
+    return ok(42);
+  };
 
   auto consumerFunction = [&]() -> ErrorOr<std::string> {
-    ErrorOr<int> maybeInt = successFunction();
-    FUSILI_CHECK_ERROR(maybeInt);
-
-    if (*maybeInt == 42) {
-      return ok(std::string("got 42"));
-    }
-
-    return error(ErrorCode::InvalidAttribute, "unexpected value");
+    return ok(std::format("got {}", FUSILLI_TRY(successFunction())));
   };
 
   auto failingConsumer = [&]() -> ErrorOr<std::string> {
-    ErrorOr<int> maybeInt = failingFunction();
-    FUSILI_CHECK_ERROR(maybeInt);
-
-    // This should not be reached
-    return ok(std::string("should not reach here"));
+    return ok(std::format("got {}", FUSILLI_TRY(failingFunction())));
   };
 
   SECTION("Success propagation") {
+    successFunctionCallCount = 0;
     ErrorOr<std::string> result = consumerFunction();
+    // Check that call count is what's expected. The count might be incorrect
+    // if, for example, the macros double evaluate an expression.
+    REQUIRE(successFunctionCallCount == 1);
     REQUIRE(isOk(result));
     REQUIRE(*result == "got 42");
   }
 
   SECTION("Error propagation") {
+    failingFunctionCallCount = 0;
     ErrorOr<std::string> result = failingConsumer();
+    REQUIRE(failingFunctionCallCount == 1);
     REQUIRE(isError(result));
     ErrorObject err = result;
     REQUIRE(err.getCode() == ErrorCode::NotImplemented);
@@ -276,36 +281,92 @@ TEST_CASE("ErrorOr <> ErrorOr error propagation", "[logging][erroror]") {
   }
 }
 
-TEST_CASE("ErrorOr <> ErrorObject error propagation", "[logging][erroror]") {
-  auto failingFunction = []() -> ErrorObject {
+// Test error propagation when a function returning an `ErrorOr` type is called
+// by another function returning `ErrorObject` type. `ErrorOr`s should freely
+// convert to `ErrorObjects`.
+TEST_CASE("ErrorOr -> ErrorObject error propagation", "[logging][erroror]") {
+  int failingFunctionCallCount = 0;
+  auto failingFunction = [&failingFunctionCallCount]() -> ErrorOr<int> {
+    failingFunctionCallCount++;
     return error(ErrorCode::NotImplemented, "not implemented");
   };
 
-  auto successFunction = []() -> ErrorObject { return ok(); };
+  int successFunctionCallCount = 0;
+  auto successFunction = [&successFunctionCallCount]() -> ErrorOr<int> {
+    successFunctionCallCount++;
+    return ok(42);
+  };
+
+  auto consumerFunction = [&]() -> ErrorObject {
+    FUSILLI_CHECK_ERROR(successFunction());
+
+    return ok();
+  };
+
+  auto failingConsumer = [&]() -> ErrorObject {
+    FUSILLI_CHECK_ERROR(failingFunction());
+
+    assert(false && "unreachable");
+    return ok();
+  };
+
+  SECTION("Success propagation") {
+    successFunctionCallCount = 0;
+    ErrorObject result = consumerFunction();
+    REQUIRE(successFunctionCallCount == 1);
+    REQUIRE(isOk(result));
+  }
+
+  SECTION("Error propagation") {
+    failingFunctionCallCount = 0;
+    ErrorObject result = failingConsumer();
+    REQUIRE(failingFunctionCallCount == 1);
+    REQUIRE(isError(result));
+    REQUIRE(result.getCode() == ErrorCode::NotImplemented);
+    REQUIRE(result.getMessage() == "not implemented");
+  }
+}
+
+// Test error propagation when a function returning an `ErrorObject` type is
+// called by another function returning `ErrorOr` type. Failed `ErrorObjects`
+// should be free to convert to `ErrorOr`s.
+TEST_CASE("ErrorObject -> ErrorOr error propagation", "[logging][erroror]") {
+  int failingFunctionCallCount = 0;
+  auto failingFunction = [&failingFunctionCallCount]() -> ErrorObject {
+    failingFunctionCallCount++;
+    return error(ErrorCode::NotImplemented, "not implemented");
+  };
+
+  int successFunctionCallCount = 0;
+  auto successFunction = [&successFunctionCallCount]() -> ErrorObject {
+    successFunctionCallCount++;
+    return ok();
+  };
 
   auto consumerFunction = [&]() -> ErrorOr<std::string> {
-    ErrorObject maybeInt = successFunction();
-    FUSILI_CHECK_ERROR(maybeInt);
-
+    FUSILLI_CHECK_ERROR(successFunction());
     return ok("success!");
   };
 
   auto failingConsumer = [&]() -> ErrorOr<std::string> {
-    ErrorOr<int> maybeInt = failingFunction();
-    FUSILI_CHECK_ERROR(maybeInt);
+    FUSILLI_CHECK_ERROR(failingFunction());
 
-    // This should not be reached
-    return ok(std::string("should not reach here"));
+    assert(false && "unreachable");
+    return ok("unreachable");
   };
 
   SECTION("Success propagation") {
+    successFunctionCallCount = 0;
     ErrorOr<std::string> result = consumerFunction();
+    REQUIRE(successFunctionCallCount == 1);
     REQUIRE(isOk(result));
     REQUIRE(*result == "success!");
   }
 
   SECTION("Error propagation") {
+    failingFunctionCallCount = 0;
     ErrorOr<std::string> result = failingConsumer();
+    REQUIRE(failingFunctionCallCount == 1);
     REQUIRE(isError(result));
     ErrorObject err = result;
     REQUIRE(err.getCode() == ErrorCode::NotImplemented);

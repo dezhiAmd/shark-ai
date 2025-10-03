@@ -8,6 +8,7 @@ import z3  # type: ignore
 import math
 from abc import ABC, abstractmethod
 from typing import Iterator
+from typing import Optional
 
 from iree.compiler import ir  # type: ignore
 from iree.compiler.dialects import iree_codegen, iree_gpu  # type: ignore
@@ -41,6 +42,7 @@ def adjust_problem_size_for_pipeline(
 
 def generate_generic_contraction_solutions(
     tuner_ctx: common.TunerContext,
+    gpu_target_info: iree_gpu.TargetInfo,
     contraction_dims: common.ContractionDimensions,
     matmul_size: common.ContractionSizes,
     lhs_type: common.ShapedType,
@@ -49,7 +51,6 @@ def generate_generic_contraction_solutions(
     dispatch_kind: common.DispatchKind,
     codegen_pipeline: iree_codegen.DispatchLoweringPassPipeline = iree_codegen.DispatchLoweringPassPipeline.LLVMGPUVectorDistribute,
     num_subgroups: int = 4,
-    mma_intrinsics: list[iree_gpu.MMAIntrinsic] = [],
     allowed_waves_per_eu: list[int] = [2],
     pipeline_options_search_space: dispatch_constraints.PipelineOptionsSearchSpace = dispatch_constraints.PipelineOptionsSearchSpace(),
 ) -> Iterator[list[common.TuningConfiguration]]:
@@ -107,7 +108,7 @@ def generate_generic_contraction_solutions(
                 [wg_x, wg_y, wg_z],
                 sg_m_cnt,
                 sg_n_cnt,
-                mma_intrinsics,
+                gpu_target_info,
                 dispatch_kind,
             )
             constraints += [v == 0 for v in subgroup_m_vars + subgroup_n_vars]
@@ -124,11 +125,18 @@ def generate_generic_contraction_solutions(
                 [wg_x, wg_y, wg_z],
                 sg_m_cnt,
                 sg_n_cnt,
-                mma_intrinsics,
+                gpu_target_info,
             )
 
     solver.add(z3.simplify(z3.And(constraints)))
     tuner_ctx.logger.debug(f"Initial constraints: {solver}")
+
+    num_loops = (
+        len(contraction_dims.m)
+        + len(contraction_dims.n)
+        + len(contraction_dims.k)
+        + len(contraction_dims.batch)
+    )
 
     i = 0
     while solver.check() == z3.sat:
@@ -144,6 +152,7 @@ def generate_generic_contraction_solutions(
             *intrinsic_mnk_shape,
             lhs_type.element_type,
             rhs_type.element_type,
+            gpu_target_info.mma_intrinsics,
         )
 
         def set_cdim_tile_sizes(tile_sizes, contraction_dims, csizes):
@@ -217,6 +226,14 @@ def generate_generic_contraction_solutions(
                     for d in contraction_dims.k
                 ),
             ]
+        # Setting subgroup basis.
+        # TODO(Bangtian): Sync changes from IREE PR: https://github.com/iree-org/iree/pull/22000.
+        subgroup_basis_counts = [1] * num_loops
+        m_dim = contraction_dims.m[-1]
+        subgroup_basis_counts[m_dim] = lookup(sg_m_cnt)
+        n_dim = contraction_dims.n[-1]
+        subgroup_basis_counts[n_dim] = lookup(sg_n_cnt)
+        subgroup_basis_mapping = list(range(num_loops))
 
         compilation_infos = dispatch_constraints.generate_compilation_infos(
             tuner_ctx,
@@ -226,8 +243,8 @@ def generate_generic_contraction_solutions(
             subgroup_tile_sizes,
             (lookup(wg_x), lookup(wg_y), lookup(wg_z)),
             lookup(subgroup_size),
-            lookup(sg_m_cnt),
-            lookup(sg_n_cnt),
+            subgroup_basis_counts,
+            subgroup_basis_mapping,
             promote_operands,
             codegen_pipeline,
             pipeline_options_search_space,
@@ -248,6 +265,7 @@ def generate_generic_contraction_solutions(
 
 def generate_attention_solutions(
     tuner_ctx: common.TunerContext,
+    gpu_target_info: iree_gpu.TargetInfo,
     opinfo: common.AttentionOpInfo,
     qk_matmul: common.MatmulShapeType,
     pv_matmul: common.MatmulShapeType,
@@ -257,7 +275,6 @@ def generate_attention_solutions(
     dispatch_kind: common.DispatchKind,
     codegen_pipeline: iree_codegen.DispatchLoweringPassPipeline = iree_codegen.DispatchLoweringPassPipeline.LLVMGPUVectorDistribute,
     num_subgroups: int = 4,
-    mma_intrinsics: list[iree_gpu.MMAIntrinsic] = [],
     allowed_waves_per_eu: list[int] = [2],
     pipeline_options_search_space: dispatch_constraints.PipelineOptionsSearchSpace = dispatch_constraints.PipelineOptionsSearchSpace(),
 ) -> Iterator[list[common.TuningConfiguration]]:
@@ -273,8 +290,10 @@ def generate_attention_solutions(
     k_var = z3.Int("k_tile")
 
     subgroup_size = z3.Int("subgroup_size")
-    intrinsic_mn = z3.Int("intrinsic_mn")
-    intrinsic_k = z3.Int("intrinsic_k")
+    qk_intrinsic_mn = z3.Int("qk_intrinsic_mn")
+    qk_intrinsic_k = z3.Int("qk_intrinsic_k")
+    pv_intrinsic_mn = z3.Int("pv_intrinsic_mn")
+    pv_intrinsic_k = z3.Int("pv_intrinsic_k")
     sg_m_cnt = z3.Int("sg_m_cnt")
     sg_n_cnt = z3.Int("sg_n_cnt")
 
@@ -284,8 +303,10 @@ def generate_attention_solutions(
         + [k_var]
         + [
             subgroup_size,
-            intrinsic_mn,
-            intrinsic_k,
+            qk_intrinsic_mn,
+            qk_intrinsic_k,
+            pv_intrinsic_mn,
+            pv_intrinsic_k,
             sg_m_cnt,
             sg_n_cnt,
         ]
@@ -301,10 +322,11 @@ def generate_attention_solutions(
         [m_var, n_var, k_var],
         num_subgroups,
         subgroup_size,
-        [intrinsic_mn, intrinsic_k],
+        [qk_intrinsic_mn, qk_intrinsic_k],
+        [pv_intrinsic_mn, pv_intrinsic_k],
         sg_m_cnt,
         sg_n_cnt,
-        mma_intrinsics,
+        gpu_target_info,
     )
 
     solver.add(z3.simplify(z3.And(constraints)))
@@ -314,16 +336,30 @@ def generate_attention_solutions(
     while solver.check() == z3.sat:
         model = solver.model()
         lookup = lambda var: model[var].as_long()
-        intrinsic_mnk_shape = (
-            lookup(intrinsic_mn),
-            lookup(intrinsic_mn),
-            lookup(intrinsic_k),
+        qk_intrinsic_mnk_shape = (
+            lookup(qk_intrinsic_mn),
+            lookup(qk_intrinsic_mn),
+            lookup(qk_intrinsic_k),
         )
-        mma_attr = dispatch_constraints.getMMAAttr(
+        qk_mma_attr = dispatch_constraints.getMMAAttr(
             qk_matmul.acc_type,
-            *intrinsic_mnk_shape,
+            *qk_intrinsic_mnk_shape,
             qk_matmul.lhs_type,
             qk_matmul.rhs_type,
+            gpu_target_info.mma_intrinsics,
+        )
+
+        pv_intrinsic_mnk_shape = (
+            lookup(pv_intrinsic_mn),
+            lookup(pv_intrinsic_mn),
+            lookup(pv_intrinsic_k),
+        )
+        pv_mma_attr = dispatch_constraints.getMMAAttr(
+            pv_matmul.acc_type,
+            *pv_intrinsic_mnk_shape,
+            pv_matmul.lhs_type,
+            pv_matmul.rhs_type,
+            gpu_target_info.mma_intrinsics,
         )
 
         # Get workgroup tile sizes.
@@ -343,20 +379,33 @@ def generate_attention_solutions(
         workgroup_tile_sizes[opinfo.n_dims[-1]] = lookup(n_var)
         reduction_tile_sizes[opinfo.k2_dims[-1]] = lookup(k_var)
 
+        subgroup_basis_counts = [1] * opinfo.domain_rank
+        subgroup_basis_mapping = list(range(opinfo.domain_rank))
+        subgroup_basis_counts[opinfo.m_dims[-1]] = lookup(sg_m_cnt)
+        subgroup_basis_counts[opinfo.n_dims[-1]] = lookup(sg_n_cnt)
+        qk_basis_mapping = [
+            mapping
+            for i, mapping in enumerate(subgroup_basis_mapping)
+            if i not in opinfo.n_dims
+        ]
         qk_config = {
-            "mma_kind": mma_attr,
-            "subgroup_m_count": lookup(sg_m_cnt),
-            "subgroup_n_count": 1,
+            "mma_kind": qk_mma_attr,
+            "subgroup_basis": [subgroup_basis_counts, qk_basis_mapping],
             "promote_operands": [0, 1],
         }
+
         qk_lowering_config = common.get_lowering_config(
             tuner_ctx=tuner_ctx, **qk_config
         )
 
+        pv_basis_mapping = [
+            mapping
+            for i, mapping in enumerate(subgroup_basis_mapping)
+            if i not in opinfo.k1_dims
+        ]
         pv_config = {
-            "mma_kind": mma_attr,
-            "subgroup_m_count": lookup(sg_m_cnt),
-            "subgroup_n_count": lookup(sg_n_cnt),
+            "mma_kind": pv_mma_attr,
+            "subgroup_basis": [subgroup_basis_counts, pv_basis_mapping],
             "promote_operands": [1],
         }
         pv_lowering_config = common.get_lowering_config(
@@ -372,14 +421,14 @@ def generate_attention_solutions(
         promote_operands = [0, 1, 2]
         compilation_infos = dispatch_constraints.generate_compilation_infos(
             tuner_ctx,
-            mma_attr,
+            None,
             workgroup_tile_sizes,
             reduction_tile_sizes,
             [0, 0, 0],
             (workgroup_size, 1, 1),
             lookup(subgroup_size),
-            lookup(sg_m_cnt),
-            lookup(sg_n_cnt),
+            subgroup_basis_counts,
+            subgroup_basis_mapping,
             promote_operands,
             codegen_pipeline,
             pipeline_options_search_space,
@@ -426,6 +475,7 @@ class ConstraintGenerator(ABC):
     def generate_solutions(
         self,
         tuner_context: common.TunerContext,
+        gpu_target_info: iree_gpu.TargetInfo,
         codegen_pipeline: iree_codegen.DispatchLoweringPassPipeline,
         **pipeline_constraint_options,
     ) -> Iterator[list[common.TuningConfiguration]]:
@@ -477,11 +527,13 @@ class ContractionOpInterfaceConstraintGenerator(ConstraintGenerator):
     def generate_solutions(
         self,
         tuner_context: common.TunerContext,
+        gpu_target_info: iree_gpu.TargetInfo,
         codegen_pipeline: iree_codegen.DispatchLoweringPassPipeline,
         **pipeline_constraint_options,
     ) -> Iterator[list[common.TuningConfiguration]]:
         return generate_generic_contraction_solutions(
             tuner_ctx=tuner_context,
+            gpu_target_info=gpu_target_info,
             contraction_dims=self.dims,
             matmul_size=self.matmul_size,
             lhs_type=self.lhs_type,
@@ -534,11 +586,13 @@ class ConvolutionOpInterfaceConstraintGenerator(ConstraintGenerator):
     def generate_solutions(
         self,
         tuner_context: common.TunerContext,
+        gpu_target_info: iree_gpu.TargetInfo,
         codegen_pipeline: iree_codegen.DispatchLoweringPassPipeline,
         **pipeline_constraint_options,
     ) -> Iterator[list[common.TuningConfiguration]]:
         return generate_generic_contraction_solutions(
             tuner_ctx=tuner_context,
+            gpu_target_info=gpu_target_info,
             contraction_dims=self.dims,
             matmul_size=self.matmul_size,
             lhs_type=self.lhs_type,
@@ -590,11 +644,11 @@ class AttentionOpInterfaceConstraintGenerator(ConstraintGenerator):
 
         self.opinfo = common.AttentionOpInfo(
             domain_rank=raw_opinfo.domain_rank,
-            batch_dims=[attr.value for attr in raw_opinfo.batch_dims],
-            m_dims=[attr.value for attr in raw_opinfo.m_dims],
-            n_dims=[attr.value for attr in raw_opinfo.n_dims],
-            k1_dims=[attr.value for attr in raw_opinfo.k1_dims],
-            k2_dims=[attr.value for attr in raw_opinfo.k2_dims],
+            batch_dims=raw_opinfo.batch_dims,
+            m_dims=raw_opinfo.m_dims,
+            n_dims=raw_opinfo.n_dims,
+            k1_dims=raw_opinfo.k1_dims,
+            k2_dims=raw_opinfo.k2_dims,
         )
 
         q_type = ir.RankedTensorType(root_op.operands[0].type)
@@ -654,11 +708,13 @@ class AttentionOpInterfaceConstraintGenerator(ConstraintGenerator):
     def generate_solutions(
         self,
         tuner_context: common.TunerContext,
+        gpu_target_info: iree_gpu.TargetInfo,
         codegen_pipeline: iree_codegen.DispatchLoweringPassPipeline,
         **pipeline_constraint_options,
     ) -> Iterator[list[common.TuningConfiguration]]:
         return generate_attention_solutions(
             tuner_ctx=tuner_context,
+            gpu_target_info=gpu_target_info,
             opinfo=self.opinfo,
             qk_matmul=self.qk_matmul,
             pv_matmul=self.pv_matmul,
