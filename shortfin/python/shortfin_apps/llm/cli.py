@@ -58,6 +58,12 @@ def add_cli_args(parser: argparse.ArgumentParser):
         help="The number of decode steps to execute",
     )
     parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="The number prompts batched to one task",
+    )
+    parser.add_argument(
         "--temperature",
         type=float,
         required=False,
@@ -293,9 +299,16 @@ async def main(argv):
 
     prompts = process_inputs(args)
 
+    def group_prompts(prompts: List[str], group_size: int) -> List[List[str]]:
+        """Split prompts into equal-sized groups."""
+        return [prompts[i:i + group_size] for i in range(0, len(prompts), group_size)]
+
     class Task:
         def __init__(self, prompt):
-            self.prompt = prompt
+            if isinstance(prompt, list):
+                self.prompt = prompt
+            else:
+                self.prompt = [prompt]
             self.responder: Optional[CliResponder] = None
             self.result: Optional[str] = None
 
@@ -317,18 +330,38 @@ async def main(argv):
             return 0
 
     logger.info(f"Setting up a tasklist of {len(prompts)} items")
+
     tasks: List[Task] = []
-    for p in prompts:
-        task = Task(p)
+    group_size = args.batch_size
+    for group in group_prompts(prompts, group_size):
+        task = Task(group)
         tasks.append(task)
 
     async def worker(name, queue, fiber):
         while True:
             task: Task = await queue.get()
             responder = CliResponder(log_tokens=args.log_tokens)
-            gen_req = GenerateReqInput(
-                text=task.prompt, sampling_params=sampling_params, stream=args.stream
-            )
+
+            # Determine if it's a batch or single prompt
+            if len(task.prompt) > 1:
+                # Batch mode
+                sampling_params_list = [
+                    deepcopy(sampling_params) for _ in task.prompt
+                ]
+                gen_req = GenerateReqInput(
+                    text=task.prompt,
+                    sampling_params=sampling_params_list,
+                    is_single=False,
+                    stream=args.stream
+                )
+            else:
+                # Single mode
+                gen_req = GenerateReqInput(
+                    text=task.prompt[0],
+                    sampling_params=sampling_params,
+                    stream=args.stream
+                )
+
             process = ClientGenerateBatchProcess(
                 service, gen_req, responder, fiber=fiber
             )
