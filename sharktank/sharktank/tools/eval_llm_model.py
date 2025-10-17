@@ -7,28 +7,29 @@
 import argparse
 import json
 import math
+import os
 import torch
 
 from sharktank.utils.tokenizer import load_tokenizer
 from sharktank.utils.llm_utils import (
     TorchInstance,
     LlmInstance,
-    llama_config_page_size,
+    llama_config_page_sizes,
     LlmPerplexityEval,
 )
 
 
-def main(device, dataset, irpa, tokenizer, expected_err):
+def main(device, dataset, irpa, tokenizer, min_context, expected_err):
     torch.set_default_device(device)
     tokenizer = load_tokenizer(tokenizer)
     torch_instance = TorchInstance.load(irpa, device=device)
 
-    page_size = llama_config_page_size(torch_instance.config)
+    page_sizes = llama_config_page_sizes(torch_instance.config)
     block_count = 512
 
     llm = LlmInstance(
         model_instance=torch_instance,
-        page_size=page_size,
+        page_sizes=page_sizes,
         block_seq_stride=torch_instance.config.block_seq_stride,
         block_count=block_count,
     )
@@ -37,7 +38,9 @@ def main(device, dataset, irpa, tokenizer, expected_err):
     with open(dataset, "r") as dataset:
         dataset = LlmPerplexityEval.Dataset(**json.load(dataset))
 
-    results = runner.run_dataset(dataset=dataset, tokenizer=tokenizer)
+    results = runner.run_dataset(
+        dataset=dataset, tokenizer=tokenizer, min_context=min_context
+    )
     print(json.dumps(results.as_dict(), indent=1))
 
     if expected_err:
@@ -60,11 +63,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--expected-err", help="expected error in the difference", type=float
     )
+    parser.add_argument(
+        "--min-context", help="required context length", type=int, default=0
+    )
     args = parser.parse_args()
+
+    if not os.path.isdir(args.tokenizer):
+        raise ValueError(
+            "Provide the path to the tokenizer's folder rather than the json itself."
+        )
     main(
         device=args.device,
         dataset=args.dataset,
         irpa=args.irpa,
         tokenizer=args.tokenizer,
+        min_context=args.min_context,
         expected_err=args.expected_err,
     )

@@ -13,7 +13,11 @@
 #ifndef FUSILLI_SUPPORT_LOGGING_H
 #define FUSILLI_SUPPORT_LOGGING_H
 
+#include <iree/base/status.h>
+
 #include <cassert>
+#include <cstddef>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -22,14 +26,58 @@
 
 namespace fusilli {
 
+// An RAII based adapter for writing to C++ `std::strings` using C-style
+// `fprint`s.
+//
+// example usage:
+//   // C functions from IREE runtime api.
+//   status_t try_thing();
+//   bool is_ok(status_t status);
+//   void error_message_fprint(FILE *stream, status_t error_status);
+//
+//   void CPPCodeUsingCAPI() {
+//     status_t status = try_thing();
+//     if (!is_ok(status)) {
+//       std::string err;
+//       error_message_fprint(FprintToString(err), status);
+//       FUSILLI_LOG_LABEL_RED("try_thing failure: " << err);
+//     }
+//   }
+struct FprintToString {
+  char *buffer;
+  size_t size;
+  FILE *stream;
+  std::string &output;
+
+  explicit FprintToString(std::string &output)
+      : buffer(nullptr), size(0), stream(open_memstream(&buffer, &size)),
+        output(output) {}
+
+  ~FprintToString() {
+    fclose(stream);
+    output = std::string(buffer);
+    free(buffer);
+  }
+
+  operator FILE *() { return stream; }
+
+  // Delete all other constructors.
+  FprintToString(FprintToString &&other) noexcept = delete;
+  FprintToString operator=(const FprintToString &&) noexcept = delete;
+  FprintToString(const FprintToString &) = delete;
+  FprintToString &operator=(const FprintToString &) = delete;
+};
+
 enum class [[nodiscard]] ErrorCode {
   OK,
   NotImplemented,
   NotValidated,
+  NotCompiled,
   AttributeNotSet,
   InvalidAttribute,
-  TensorNotFound,
+  VariantPackError,
   CompileFailure,
+  RuntimeFailure,
   FileSystemFailure,
 };
 
@@ -37,10 +85,12 @@ static const std::unordered_map<ErrorCode, std::string> ErrorCodeToStr = {
     {ErrorCode::OK, "OK"},
     {ErrorCode::NotImplemented, "NOT_IMPLEMENTED"},
     {ErrorCode::NotValidated, "NOT_VALIDATED"},
+    {ErrorCode::NotCompiled, "NOT_COMPILED"},
     {ErrorCode::AttributeNotSet, "ATTRIBUTE_NOT_SET"},
     {ErrorCode::InvalidAttribute, "INVALID_ATTRIBUTE"},
-    {ErrorCode::TensorNotFound, "TENSOR_NOT_FOUND"},
+    {ErrorCode::VariantPackError, "VARIANT_PACK_ERROR"},
     {ErrorCode::CompileFailure, "COMPILE_FAILURE"},
+    {ErrorCode::RuntimeFailure, "RUNTIME_FAILURE"},
     {ErrorCode::FileSystemFailure, "FILE_SYSTEM_FAILURE"},
 };
 
@@ -51,6 +101,17 @@ struct [[nodiscard]] ErrorObject {
   ErrorObject() : code(ErrorCode::OK), errMsg("") {}
   ErrorObject(ErrorCode err, std::string msg)
       : code(err), errMsg(std::move(msg)) {}
+  ErrorObject(iree_status_t status) {
+    if (iree_status_is_ok(status)) {
+      code = ErrorCode::OK;
+      errMsg = "";
+      return;
+    }
+    code = ErrorCode::RuntimeFailure;
+    // Write error message into `errMsg` variable using the runtime's fprint
+    // based reporting.
+    iree_status_fprint(FprintToString(errMsg), status);
+  }
 
   ErrorCode getCode() const { return code; }
   const std::string &getMessage() const { return errMsg; }
@@ -109,12 +170,11 @@ public:
   template <typename U>
     requires std::is_constructible_v<T, U>
   ErrorOr(ErrorOr<U> &&other) {
-    if (isOk(other)) {
+    if (isOk(other))
       storage_ = Storage(std::in_place_type<T>, std::move(*other));
-    } else {
+    else
       storage_ = Storage(std::in_place_type<ErrorObject>,
                          std::move(std::get<ErrorObject>(other.storage_)));
-    }
   }
 
   // Construct implicitly from ErrorObject to support returning `error(...)`
@@ -141,9 +201,8 @@ public:
 
   // Convert to error object.
   operator ErrorObject() const {
-    if (std::holds_alternative<T>(storage_)) {
+    if (std::holds_alternative<T>(storage_))
       return ok();
-    }
     return std::get<ErrorObject>(storage_);
   }
 
@@ -152,18 +211,31 @@ public:
   "cannot be dereferenced. ErrorOr<T> state should be checked with "           \
   "isOk() or isError() utility methods before dereferencing."
 
+// Equivalent to `assert(hasValue() && ACCESSOR_ERROR_MSG);` but unlike the
+// assert, this will remain in release builds. If the underlying std::variant
+// doesn't contain a value the dereference call will always cause a crash, this
+// ensure's it's a crash with a reasonable error message rather than an variant
+// access exception.
+#define ASSERT_HASVALUE()                                                      \
+  do {                                                                         \
+    if (!hasValue()) [[unlikely]] { /*C++20*/                                  \
+      std::cerr << ACCESSOR_ERROR_MSG << std::endl;                            \
+      std::abort();                                                            \
+    }                                                                          \
+  } while (false)
+
   // Dereference operator - returns a reference to the contained value. The
   // ErrorOr must be in success state (checked via isOk()) before calling
   // accessor methods.
   T &operator*() {
-    assert(hasValue() && ACCESSOR_ERROR_MSG);
+    ASSERT_HASVALUE();
     return std::get<T>(storage_);
   }
 
   // Const dereference operator. The ErrorOr must be in success state (checked
   // via isOk()) before calling accessor methods.
   const T &operator*() const {
-    assert(hasValue() && ACCESSOR_ERROR_MSG);
+    ASSERT_HASVALUE();
     return std::get<T>(storage_);
   }
 
@@ -171,17 +243,18 @@ public:
   // ErrorOr must be in success state (checked via isOk()) before calling
   // accessor methods.
   T *operator->() {
-    assert(hasValue() && ACCESSOR_ERROR_MSG);
+    ASSERT_HASVALUE();
     return &std::get<T>(storage_);
   }
 
   // Const member access operator. The ErrorOr must be in success state (checked
   // via isOk()) before calling accessor methods.
   const T *operator->() const {
-    assert(hasValue() && ACCESSOR_ERROR_MSG);
+    ASSERT_HASVALUE();
     return &std::get<T>(storage_);
   }
 #undef ACCESSOR_ERROR_MSG
+#undef ASSERT_HASVALUE
 
 private:
   using Storage = std::variant<T, ErrorObject>;
@@ -193,7 +266,7 @@ private:
   bool hasValue() const noexcept { return std::holds_alternative<T>(storage_); }
 
   // Friend declaration to allow ErrorOr<U> to access ErrorOr<T>'s private
-  // members
+  // members.
   template <typename U> friend class ErrorOr;
 };
 
@@ -211,17 +284,16 @@ template <typename T> inline auto ok(T &&y) {
   return ErrorOr<std::decay_t<T>>(std::forward<T>(y));
 }
 
-// Stream operator for ErrorCode
+// Stream operator for ErrorCode.
 inline std::ostream &operator<<(std::ostream &os, const ErrorCode &code) {
-  auto it = ErrorCodeToStr.find(code);
-  if (it != ErrorCodeToStr.end())
-    os << it->second;
+  if (ErrorCodeToStr.contains(code)) // C++20
+    os << ErrorCodeToStr.at(code);
   else
     os << "UNKNOWN_ERROR_CODE";
   return os;
 }
 
-// Stream operator for ErrorObject
+// Stream operator for ErrorObject.
 inline std::ostream &operator<<(std::ostream &os, const ErrorObject &err) {
   os << err.getCode() << ": " << err.getMessage();
   return os;
@@ -231,9 +303,8 @@ inline bool &isLoggingEnabled() {
   static bool logEnabled = []() -> bool {
     const char *envVal = std::getenv("FUSILLI_LOG_INFO");
     // Disabled when FUSILLI_LOG_INFO is not set
-    if (!envVal) {
+    if (!envVal)
       return false;
-    }
     std::string envValStr(envVal);
     // Disabled when FUSILLI_LOG_INFO == "" (empty string)
     // Disabled when FUSILLI_LOG_INFO == "0", any other value enables it
@@ -242,11 +313,11 @@ inline bool &isLoggingEnabled() {
   return logEnabled;
 }
 
-// Get the logging stream based on `FUSILLI_LOG_FILE`
-//   When not set, logging is disabled.
-//   When set to `stdout`, uses `std::cout`.
-//   When set to `stderr`, uses `std::cerr`.
-//   When set to /some/file/path.txt, uses that.
+// Get the logging stream based on `FUSILLI_LOG_FILE`:
+//   - When not set, logging is disabled.
+//   - When set to `stdout`, uses `std::cout`.
+//   - When set to `stderr`, uses `std::cerr`.
+//   - When set to /some/file/path.txt, uses that.
 inline std::ostream &getStream() {
   static std::ofstream outFile;
   static std::ostream &stream = []() -> std::ostream & {
@@ -274,17 +345,15 @@ public:
 
   template <typename T>
   const ConditionalStreamer &operator<<(const T &t) const {
-    if (isLoggingEnabled()) {
+    if (isLoggingEnabled())
       stream_ << t;
-    }
     return *this;
   }
 
   const ConditionalStreamer &
   operator<<(std::ostream &(*spl)(std::ostream &)) const {
-    if (isLoggingEnabled()) {
+    if (isLoggingEnabled())
       stream_ << spl;
-    }
     return *this;
   }
 
@@ -332,12 +401,24 @@ inline ConditionalStreamer &getLogger() {
     }                                                                          \
   } while (false);
 
-#define FUSILLI_CHECK_ERROR(x)                                                 \
+// Checks if the expression that evaluates to an ErrorObject (or an ErrorOr<T>
+// that contains an error) resulted in the error state and propagates the error.
+//
+// Usage:
+//   ErrorObject doBar();
+//
+//   ErrorObject processFoo() {
+//     // Returns error if doBar() fails
+//     FUSILLI_CHECK_ERROR(doBar());
+//     return ok();
+//   }
+#define FUSILLI_CHECK_ERROR(expr)                                              \
   do {                                                                         \
-    if (isError(x)) {                                                          \
+    fusilli::ErrorObject _error = (expr);                                      \
+    if (isError(_error)) {                                                     \
       FUSILLI_LOG_LABEL_RED("ERROR: ");                                        \
-      FUSILLI_LOG_ENDL(#x << " at " << __FILE__ << ":" << __LINE__);           \
-      return ErrorObject(x);                                                   \
+      FUSILLI_LOG_ENDL(#expr << " at " << __FILE__ << ":" << __LINE__);        \
+      return _error;                                                           \
     }                                                                          \
   } while (false);
 
@@ -359,7 +440,7 @@ inline ConditionalStreamer &getLogger() {
     if (isError(_errorOr)) {                                                   \
       FUSILLI_LOG_LABEL_RED("ERROR: ");                                        \
       FUSILLI_LOG_ENDL(#expr << " at " << __FILE__ << ":" << __LINE__);        \
-      return ErrorObject(_errorOr);                                            \
+      return fusilli::ErrorObject(_errorOr);                                   \
     }                                                                          \
     std::move(*_errorOr);                                                      \
   })

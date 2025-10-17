@@ -27,6 +27,7 @@ class ServerConfig:
     device_settings: DeviceSettings
     prefix_sharing_algorithm: str = "none"
     num_beams: int = 1
+    chunk_block_size: Optional[int] = None
 
 
 class ServerInstance:
@@ -85,6 +86,10 @@ class ServerInstance:
             "--num_beams",
             str(self.config.num_beams),
         ]
+
+        if self.config.chunk_block_size is not None:
+            argv.extend(["--chunk_block_size", str(self.config.chunk_block_size)])
+
         argv.extend(parameters)
         argv.extend(self.config.device_settings.server_flags)
 
@@ -150,3 +155,14 @@ class ServerInstance:
             self.process.wait()
             self.process = None
             self.port = None
+
+
+def start_server(server_config):
+    server_instance = ServerInstance(server_config)
+    server_instance.start()
+    process, port, config = (
+        server_instance.process,
+        server_instance.port,
+        server_instance.config,
+    )
+    return process, port, config

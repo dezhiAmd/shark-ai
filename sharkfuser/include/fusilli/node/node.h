@@ -21,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace fusilli {
 
@@ -29,6 +30,7 @@ public:
   enum class Type {
     Composite,
     Convolution,
+    Pointwise,
   };
 
   explicit INode(const Context &ctx) : context(ctx) {}
@@ -55,22 +57,16 @@ protected:
   virtual ErrorObject postValidateNode() const { return ok(); }
 
   // MLIR assembly emitter helper methods to be provided
-  // by each node as needed
+  // by each node as needed.
   virtual std::string emitNodePreAsm() const { return ""; };
   virtual std::string emitNodePostAsm() const { return ""; };
-  virtual std::string getOperandNamesAsm() const { return ""; };
-  virtual std::string getOperandTypesAsm() const { return ""; };
-  virtual std::string getOperandNamesAndTypesAsm() const { return ""; };
-  virtual std::string getResultNamesAsm() const { return ""; };
-  virtual std::string getResultTypesAsm() const { return ""; };
 
-  // Recursively validate the node and its sub nodes
+  // Recursively validate the node and its sub nodes.
   ErrorObject validateSubtree() {
     FUSILLI_CHECK_ERROR(preValidateNode());
     FUSILLI_CHECK_ERROR(inferPropertiesNode());
-    for (const auto &subNode : subNodes_) {
+    for (const auto &subNode : subNodes_)
       FUSILLI_CHECK_ERROR(subNode->validateSubtree());
-    }
     FUSILLI_CHECK_ERROR(postValidateNode());
     return ok();
   }
@@ -80,9 +76,8 @@ protected:
   // containing sub ops.
   void emitAsmSubtree(std::ostringstream &oss) {
     oss << emitNodePreAsm();
-    for (const auto &subNode : subNodes_) {
+    for (const auto &subNode : subNodes_)
       subNode->emitAsmSubtree(oss);
-    }
     oss << emitNodePostAsm();
   }
 
@@ -92,10 +87,10 @@ protected:
   ErrorObject
   checkNodeNamesAreUnique(std::unordered_set<std::string> &usedSymbols) const {
     for (const auto &subNode : subNodes_) {
-      FUSILLI_RETURN_ERROR_IF(
-          usedSymbols.find(subNode->getName()) != usedSymbols.end(),
-          ErrorCode::InvalidAttribute,
-          "Symbol name '" + subNode->getName() + "' already in use");
+      FUSILLI_RETURN_ERROR_IF(usedSymbols.contains(subNode->getName()), // C++20
+                              ErrorCode::InvalidAttribute,
+                              "Symbol name '" + subNode->getName() +
+                                  "' already in use");
       usedSymbols.insert(subNode->getName());
       FUSILLI_CHECK_ERROR(subNode->checkNodeNamesAreUnique(usedSymbols));
     }

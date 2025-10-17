@@ -32,10 +32,28 @@ from sharktank.types import (
 
 from sharktank.kernels.topk import iree_topk
 from sharktank.ops.shape import normalize_negative_dim
+from sharktank.utils.attention import (
+    create_boolean_chunked_attention_mask,
+    create_causal_context_mask,
+    max_negative_value,
+)
 
 from ._registry import AllOfType, AllOfExprs, AllOfExprsVariadic, IsOfType, AnyType
+from .quantized_impls import quantized_tensor_layout_of_type
 from .signatures import *
 import iree.turbine.ops.iree
+
+
+@arange.override()
+def arange_default(
+    *args,
+    devices: Sequence[int] | None = None,
+    **kwargs,
+) -> DefaultPrimitiveTensor:
+    if devices is not None:  # Replicated variant should be used.
+        return NotImplemented
+
+    return DefaultPrimitiveTensor(data=torch.arange(*args, **kwargs))
 
 
 @argmax.override(Tensor)
@@ -92,12 +110,112 @@ def _split_argmax(input_tensor, dim, keepdim: bool = False, chunk_size: int = 12
     return final_index
 
 
+def attention_mask_default(
+    boolean_input_mask: torch.Tensor,
+    start_positions: torch.Tensor | None,
+    *,
+    source_len: int,
+    target_len: int,
+    attention_dtype: torch.dtype,
+) -> torch.Tensor:
+    device = boolean_input_mask.device
+
+    # Combine the causal context mask and input mask.
+    dtype = (
+        torch.float32 if attention_dtype == torch.float8_e4m3fnuz else attention_dtype
+    )
+    causal_mask = create_causal_context_mask(
+        src_len=source_len,
+        target_len=target_len,
+        start_positions=start_positions,
+        device=device,
+    )
+    boolean_mask = torch.logical_or(causal_mask, boolean_input_mask[:, None, None, :])
+    numeric_mask = torch.where(boolean_mask, max_negative_value(dtype, device), 0).to(
+        dtype
+    )
+    return numeric_mask.to(device)
+
+
+attention_mask.override(Tensor, Tensor)(attention_mask_default)
+attention_mask.override(Tensor)(attention_mask_default)
+
+
+@attention_mask_for_decode.override(Tensor)
+def attention_mask_for_decode_default(
+    boolean_input_mask: AnyTensor,
+    *,
+    attention_dtype: torch.dtype,
+) -> torch.Tensor:
+    boolean_input_mask = unbox_tensor(boolean_input_mask)
+
+    device = boolean_input_mask.device
+    dtype = (
+        torch.float32 if attention_dtype == torch.float8_e4m3fnuz else attention_dtype
+    )
+    numeric_mask = torch.where(
+        boolean_input_mask, max_negative_value(dtype, device), 0
+    ).to(dtype)
+    return numeric_mask.unsqueeze(1).unsqueeze(1).to(device)
+
+
 @cat.override(AllOfType(Tensor, PrimitiveTensor))
 def cat_default(tensors: Sequence[Tensor | PrimitiveTensor], dim: int):
     result = torch.cat([unbox_tensor(t) for t in tensors], dim)
     if isinstance(tensors[0], PrimitiveTensor):
         result = DefaultPrimitiveTensor(data=result)
     return result
+
+
+@chunk.override(Tensor)
+def chunk_default(
+    tensor: Tensor | PrimitiveTensor, chunks: int, dim: int = 0
+) -> tuple[Tensor, ...]:
+    return torch.chunk(unbox_tensor(tensor), chunks, dim)
+
+
+@chunked_attention_mask.override(Tensor)
+def chunked_attention_mask_default(
+    attention_mask: torch.Tensor, attention_chunk_size: int
+) -> torch.Tensor:
+    assert attention_mask.dim() == 4, "Attention mask must be 4-dimensional"
+    assert (
+        attention_mask.shape[1] == 1
+    ), f"Attention mask shape[1] ({attention_mask.shape[1]}) must be 1"
+    s2 = attention_mask.shape[2]
+    s3 = attention_mask.shape[3]
+    assert (
+        s2 == s3
+    ), f"Attention mask must be square in the last two dimensions ({s2} != {s3})"
+
+    sl = attention_mask.shape[2]
+    assert (
+        sl % attention_chunk_size == 0
+    ), f"Sequence length ({sl}) must be divisible by attention chunk size ({attention_chunk_size})"
+
+    attention_mask = unbox_tensor(attention_mask)
+
+    device = attention_mask.device
+    batch_seq_len = attention_mask.shape[2]
+    # TODO: handle decode step
+    start_index = 0
+    end_index = batch_seq_len
+    chunked_boolean_attention_mask = create_boolean_chunked_attention_mask(
+        attention_chunk_size=attention_chunk_size,
+        # TODO: handle decode step
+        start_index=start_index,
+        end_index=end_index,
+        device=device,
+    )
+
+    return torch.where(
+        chunked_boolean_attention_mask,
+        attention_mask,
+        torch.tensor(
+            max_negative_value(attention_mask.dtype, device=device),
+            dtype=attention_mask.dtype,
+        ),
+    )
 
 
 # conv2d
@@ -208,6 +326,11 @@ def conv1d_default(
 
 conv1d.override(Tensor, Tensor, Tensor, auto_dequant=True)(conv1d_default)
 conv1d.override(Tensor, Tensor, auto_dequant=True)(conv1d_default)
+
+
+@cos.override(Tensor)
+def cos_default(tensor: Tensor) -> Tensor:
+    return torch.cos(unbox_tensor(tensor))
 
 
 # Einsum
@@ -352,15 +475,20 @@ def expand_default(tensor: AnyTensor, shape: List[int]) -> AnyTensor:
 
 
 @expand.override(QuantizedTensor)
-def expand_quantized(tensor: QuantizedTensor, shape: List[int]) -> QuantizedTensor:
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def expand_tensor_scaled_layout(
+    tensor: QuantizedTensor, shape: List[int]
+) -> QuantizedTensor:
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = unpacked._qs.expand(*shape)
-        layout = TensorScaledLayout(
-            shape=new_qs.shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
-    return NotImplemented
+    new_qs = unpacked._qs.expand(*shape)
+    layout = TensorScaledLayout(
+        shape=new_qs.shape,
+        d=unpacked._d,
+        qs=new_qs,
+        m=unpacked._m,
+        dtype=unpacked.dtype,
+    )
+    return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
 
 
 @flatten.override(Tensor)
@@ -371,17 +499,20 @@ def flatten_default(
 
 
 @flatten.override(QuantizedTensor)
-def flatten_quantized(
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def flatten_tensor_scaled_layout(
     tensor: QuantizedTensor, start_dim: int, end_dim: int
 ) -> QuantizedTensor:
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = torch.flatten(unpacked._qs, start_dim, end_dim)
-        layout = TensorScaledLayout(
-            shape=new_qs.shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
-    return NotImplemented
+    new_qs = torch.flatten(unpacked._qs, start_dim, end_dim)
+    layout = TensorScaledLayout(
+        shape=new_qs.shape,
+        d=unpacked._d,
+        qs=new_qs,
+        m=unpacked._m,
+        dtype=unpacked.dtype,
+    )
+    return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
 
 
 @gather.override(Tensor, Tensor)
@@ -414,7 +545,10 @@ def extract_slice_QuantizedTensor(tensor: QuantizedTensor, key: slice):
     elif isinstance(unpacked, TensorScaledLayout):
         d = unpacked._d
         qs = unpacked._qs[key]
-        m = unpacked._m[key]
+        if unpacked._m.dim() == 0:
+            m = unpacked._m
+        else:
+            m = unpacked._m[key]
         shape = qs.shape
         layout = TensorScaledLayout(shape=shape, d=d, qs=qs, m=m)
         return PlanarQuantizedTensor(shape=shape, layout=layout)
@@ -465,15 +599,18 @@ def index_copy__default(
     index = unbox_tensor(index)
     tensor = unbox_tensor(tensor)
     inout_as_torch = unbox_tensor(inout)
-    if (
-        not torch.compiler.is_compiling()
-        and inout_as_torch.is_cpu
-        and inout_as_torch.dtype == torch.float8_e4m3fnuz
-    ):
-        # PyTorch does not have eager implementation for float8_e4m3fnuz in CPU.
+    if not torch.compiler.is_compiling() and inout_as_torch.dtype in [
+        torch.float8_e4m3fnuz,
+        torch.float8_e4m3fn,
+    ]:
+        # PyTorch/PyTorch ROCm does not have eager implementation for various dtypes
+        # for CPU/GPU.
         # We need to view as int8 before performing the operation.
         # We still want to avoid the bitcasts during export as the IREE compiler has
         # trouble fusing them.
+        # We could maybe be more picky in selecting this path depending on the exact
+        # GPU arch and PyTorch ROCm version to determine if there is support to call
+        # directly.
         inout_as_torch = inout_as_torch.view(dtype=torch.int8)
         tensor = tensor.view(dtype=torch.int8)
     inout_as_torch.index_copy_(dim, index, tensor)
@@ -492,7 +629,7 @@ def index_put__default(
     if (
         not torch.compiler.is_compiling()
         and inout_as_torch.is_cpu
-        and inout_as_torch.dtype == torch.float8_e4m3fnuz
+        and inout_as_torch.dtype in [torch.float8_e4m3fnuz, torch.float8_e4m3fn]
     ):
         # PyTorch does not have eager implementation for float8_e4m3fnuz in CPU.
         # We need to view as int8 before performing the operation.
@@ -512,6 +649,16 @@ def index_select_default(
     index: Union[Tensor, PrimitiveTensor],
 ) -> Union[Tensor, PrimitiveTensor]:
     return torch.index_select(unbox_tensor(tensor), dim, unbox_tensor(index))
+
+
+@input_mask.override(Tensor)
+def input_mask_default(seq_lens: torch.Tensor, batch_seqlen: int) -> torch.Tensor:
+    seq_lens = unbox_tensor(seq_lens)
+
+    range_vector = torch.arange(0, batch_seqlen, 1, device=seq_lens.device)
+    matrix = seq_lens.unsqueeze(dim=-1)
+    mask = range_vector >= matrix
+    return mask
 
 
 @interpolate.override(Tensor)
@@ -706,6 +853,11 @@ def sigmoid_default(tensor: Tensor) -> Tensor:
     return tensor.sigmoid()
 
 
+@sin.override(Tensor)
+def sin_default(tensor: Tensor) -> Tensor:
+    return torch.sin(unbox_tensor(tensor))
+
+
 @softmax.override(Tensor)
 def softmax_default(
     tensor: Union[Tensor, PrimitiveTensor],
@@ -770,7 +922,8 @@ def swiglu_default(
         x_glu = x_glu.clamp(min=None, max=limit)
         x_lin = x_lin.clamp(min=-limit, max=limit)
     # SwiGLU: swish(alpha * a) * (b + 1)
-    out_glu = x_glu * torch.sigmoid(alpha * x_glu)
+    alpha = torch.tensor(alpha, dtype=x.dtype)
+    out_glu = x_glu * sigmoid(alpha * x_glu)
     return out_glu * (x_lin + 1)
 
 
@@ -900,15 +1053,20 @@ def unsqueeze_default(tensor: Union[Tensor, PrimitiveTensor], dim: int) -> Tenso
 
 
 @unsqueeze.override(QuantizedTensor)
-def unsqueeze_quantized(tensor: QuantizedTensor, dim: int) -> QuantizedTensor:
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def unsqueeze_tensor_scaled_layout(
+    tensor: QuantizedTensor, dim: int
+) -> QuantizedTensor:
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = unpacked._qs.unsqueeze(dim)
-        layout = TensorScaledLayout(
-            shape=new_qs.shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
-    return NotImplemented
+    new_qs = unpacked._qs.unsqueeze(dim)
+    layout = TensorScaledLayout(
+        shape=new_qs.shape,
+        d=unpacked._d,
+        qs=new_qs,
+        m=unpacked._m,
+        dtype=unpacked.dtype,
+    )
+    return PlanarQuantizedTensor(shape=new_qs.shape, layout=layout)
 
 
 @squeeze.override(AllOfType(AnyTensor, PrimitiveTensor))
@@ -1057,25 +1215,25 @@ def view_default(
 
 
 @view.override(QuantizedTensor)
-def view_QuantizedTensor(tensor: QuantizedTensor, shape):
+@quantized_tensor_layout_of_type(tensor=TensorScaledLayout)
+def view_tensor_scaled_layout(tensor: QuantizedTensor, shape, dtype):
+    if dtype:
+        return NotImplemented
     unpacked = tensor.unpack()
-    if isinstance(unpacked, TensorScaledLayout):
-        new_qs = unpacked._qs.view(shape)
-        layout = TensorScaledLayout(
-            shape=shape, d=unpacked._d, qs=new_qs, m=unpacked._m
-        )
-        return PlanarQuantizedTensor(shape=shape, layout=layout)
-    elif isinstance(unpacked, BlockScaledI4Layout):
-        bs = 16
-        shape = list(shape)
-        new_d = unpacked._d.view(shape[:-1] + [shape[-1] // 32, 1])
-        qs_shape = shape[:-1] + [shape[-1] // 32, 16]
-        new_qs = unpacked._qs.view(qs_shape)
-        if unpacked.m is not None:
-            new_m = unpacked.m.view(shape[:-1] + [shape[-1] // 32, 1])
-        layout = BlockScaledI4Layout(shape=shape, d=new_d, qs=new_qs, m=new_m)
-        return PlanarQuantizedTensor(shape=shape, layout=layout)
-    return NotImplemented
+    new_qs = unpacked._qs.view(shape)
+    layout = TensorScaledLayout(
+        shape=shape, d=unpacked._d, qs=new_qs, m=unpacked._m, dtype=dtype
+    )
+    return PlanarQuantizedTensor(shape=shape, layout=layout)
+
+
+@view.override(QuantizedTensor)
+@quantized_tensor_layout_of_type(tensor=BlockScaledLayout)
+def view_block_scaled_layout(tensor: QuantizedTensor, shape, dtype):
+    if dtype:
+        return NotImplemented
+    unpacked = tensor.unpack()
+    return view_block_scaled(tensor, shape, dtype)
 
 
 @view_as_complex.override(Tensor)

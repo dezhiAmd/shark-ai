@@ -55,6 +55,7 @@ def generate(
             v_head_dim=128,
             rope_dimension_count=rope_dimension_count,
             rope_freq_base=10000.0,
+            rope_interleave_emb=True,
             expert_count=expert_count,
             expert_used_count=used_experts,
             expert_shared_count=1,
@@ -67,6 +68,7 @@ def generate(
         block_seq_stride=block_seq_stride,
         activation_dtype=dtype_norm,
         attention_dtype=dtype_norm,
+        kv_cache_dtype=dtype_norm,
     )
 
     theta = make_random_deepseek_theta(

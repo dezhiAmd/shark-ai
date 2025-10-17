@@ -42,6 +42,7 @@ class BaseBenchmarkTest(unittest.TestCase):
             "--iree-stream-resource-memory-model=discrete",
             "--iree-hal-memoization=true",
             "--iree-stream-affinity-solver-max-iterations=1024",
+            "--iree-hip-encoding-layout-resolver=data-tiling",
         ]
         self.artifact_dir = artifact_dir
         self.dir_path = self.__class__.dir_path / dir_path_name
@@ -237,7 +238,7 @@ class BenchmarkLlama3_1_8B(BaseBenchmarkTest):
             pipeline_parallelism_size=1,
             block_seq_stride=32,
             cwd=self.repo_root,
-            use_hf=True,
+            interleave_rotary=False,
             activation_dtype="bfloat16",
             attention_dtype="bfloat16",
             kv_cache_dtype="float8_e4m3fnuz",
@@ -261,11 +262,10 @@ class BenchmarkLlama3_1_8B(BaseBenchmarkTest):
             pipeline_parallelism_size=1,
             block_seq_stride=32,
             cwd=self.repo_root,
-            use_hf=True,
+            interleave_rotary=False,
             activation_dtype="bfloat16",
             attention_dtype="float8_e4m3fnuz",
             kv_cache_dtype="float8_e4m3fnuz",
-            use_attention_mask=True,
             output_name=self.dir_path / f"fp8_attnf8_{input_size}_tp1",
             hip_device_id=self.iree_device,
         )
@@ -362,7 +362,6 @@ class BenchmarkLlama3_1_70B(BaseBenchmarkTest):
     @parameterized.expand(tuple(itertools.product((128, 2048), (1, 8))))
     @pytest.mark.xfail(
         reason="https://github.com/nod-ai/shark-ai/issues/1355",
-        strict=False,
         raises=IreeBenchmarkException,
     )
     def test_benchmark70B_f16(self, input_size: int, tp: int):
@@ -389,9 +388,7 @@ class BenchmarkLlama3_1_70B(BaseBenchmarkTest):
 
         self.export_compile_benchmark()
 
-    @pytest.mark.xfail(
-        reason="70b fp8 irpa does not exist", strict=True, raises=ExportMlirException
-    )
+    @pytest.mark.xfail(reason="70b fp8 irpa does not exist", raises=ExportMlirException)
     def test_benchmark70B_fp8_tp1(self):
         self.export_artifact = ExportArtifacts(
             irpa_path=self.llama3_70b_f8_model,

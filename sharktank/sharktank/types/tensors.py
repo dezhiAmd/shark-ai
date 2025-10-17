@@ -31,7 +31,7 @@ import torch._subclasses.functional_tensor
 from torch.utils._pytree import register_pytree_node, SequenceKey
 import torch.utils._pytree
 from sharktank.utils.math import ceildiv
-from sharktank.utils import tree as tree_utils
+from sharktank.utils import iterables_equal, tree as tree_utils
 from sharktank.utils.io import ShardedArchiveBuilder
 from iree.turbine.aot import (
     DeviceTensorTrait,
@@ -405,6 +405,11 @@ class InferenceTensor(ABC):
 
         return to(self, dtype=torch.bool)
 
+    def chunk(self, chunks: int, dim: int = 0) -> tuple["AnyTensor", ...]:
+        from sharktank.ops import chunk
+
+        return chunk(self, chunks, dim)
+
     @property
     def device(self) -> torch.device:
         """Equivalent to torch.Tensor.device."""
@@ -512,6 +517,16 @@ class InferenceTensor(ABC):
 
         return sigmoid(self)
 
+    def sin(self) -> "AnyTensor":
+        from sharktank.ops import sin
+
+        return sin(self)
+
+    def cos(self) -> "AnyTensor":
+        from sharktank.ops import cos
+
+        return cos(self)
+
     def size(self, dim: Optional[int] = None) -> tuple[int]:
         if dim is None:
             return tuple(self.shape)
@@ -543,7 +558,7 @@ class InferenceTensor(ABC):
 
     def sum(
         self,
-        dim: Union[int, List[int]],
+        dim: Union[int, List[int], None] = None,
         keepdim: bool = False,
         *,
         dtype: torch.dtype = None,
@@ -642,6 +657,16 @@ class InferenceTensor(ABC):
         from sharktank.ops import elementwise
 
         return elementwise(torch.mul, self, rhs)
+
+    def __matmul__(self, rhs):
+        from sharktank.ops import matmul
+
+        return matmul(self, rhs)
+
+    def __rmatmul__(self, lhs):
+        from sharktank.ops import matmul
+
+        return matmul(lhs, self)
 
     def __rmul__(self, lhs):
         # Assumes commutative multiplication due to torch elementwise ops not handling
@@ -1092,6 +1117,11 @@ class ShardedTensor(InferenceTensor):
             old_devices
         ), f"Expected {len(shards)} old devices, got {len(old_devices)} instead."
 
+        if list(old_devices) == list(new_devices):
+            # Exiting early to not create redundant transfers.
+            # The redudant transfers slow down compilation and can cause device placement issues.
+            return shards
+
         return tuple(
             (
                 transfer_to_logical_device(shard, new_devices[j])
@@ -1099,6 +1129,20 @@ class ShardedTensor(InferenceTensor):
                 else barrier_on_logical_device(shard, new_devices[j])
             )
             for j, shard in enumerate(shards)
+        )
+
+    def is_deep_equal(self, other: Any, compare_name: bool = True) -> bool:
+        if type(self) != type(other):
+            return False
+        if self.shard_count != other.shard_count or self.shard_dim != other.shard_dim:
+            return False
+        if not iterables_equal(self.devices, other.devices):
+            return False
+        if not self._is_deep_equal(other, compare_name=compare_name):
+            return False
+        return all(
+            a.is_deep_equal(b, compare_name=compare_name)
+            for a, b in zip(self.shards, other.shards)
         )
 
 
@@ -1222,18 +1266,6 @@ class ShardedTensorBase(ShardedTensor):
             + ("" if self.shard_dim is None else f"shard_dim={self.shard_dim}, ")
             + f"shard_count={len(self._shards)} "
             f"of {self.shards[0].shape})"
-        )
-
-    def is_deep_equal(self, other: Any, compare_name: bool = True) -> bool:
-        if type(self) != type(other):
-            return False
-        if self.shard_count != other.shard_count or self.shard_dim != other.shard_dim:
-            return False
-        if not self._is_deep_equal(other, compare_name=compare_name):
-            return False
-        return all(
-            a.is_deep_equal(b, compare_name=compare_name)
-            for a, b in zip(self.shards, other.shards)
         )
 
 
@@ -1606,15 +1638,6 @@ class ReplicatedTensor(ShardedTensor):
             f"shard_count={len(self._shards)} "
             f"of {self.shards[0].shape})"
         )
-
-    def is_deep_equal(self, other: Any, *, compare_name: bool = True) -> bool:
-        if not isinstance(other, ReplicatedTensor):
-            return False
-        if self.shard_count != other.shard_count:
-            return False
-        if not self._is_deep_equal(other, compare_name=compare_name):
-            return False
-        return self.shards[0].is_deep_equal(other.shards[0], compare_name=compare_name)
 
 
 @register_inference_tensor

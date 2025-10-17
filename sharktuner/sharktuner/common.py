@@ -4,7 +4,6 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-import z3  # type: ignore
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -43,6 +42,9 @@ class CommonTypes:
 
     def getI64(self, value: int) -> ir.IntegerAttr:
         return ir.IntegerAttr.get(self.i64, value)
+
+    def getI64ArrayAttr(self, values: list[int]) -> ir.ArrayAttr:
+        return ir.ArrayAttr.get([self.getI64(x) for x in values])
 
 
 class TunerContext:
@@ -256,15 +258,22 @@ def get_lowering_config(
                     assert (
                         False
                     ), f"Unsupported type for key '{key}': {type(value).__name__}"
-            case "subgroup_m_count" | "subgroup_n_count":
-                if isinstance(value, int):
-                    promoted_value = tuner_ctx.type.getI64(value)
-                elif not isinstance(value, tuner_ctx.type.i64):
+            case "subgroup_basis":
+                if isinstance(value, list) and len(value) == 2:
+                    counts, mapping = value
+                    assert isinstance(counts, list) and isinstance(
+                        mapping, list
+                    ), f"subgroup_basis must contain two lists [counts, mapping]"
+                    counts_attr = tuner_ctx.type.getI64ArrayAttr(counts)
+                    mapping_attr = tuner_ctx.type.getI64ArrayAttr(mapping)
+                    promoted_value = ir.ArrayAttr.get([counts_attr, mapping_attr])
+
+                else:
                     assert (
                         False
                     ), f"Unsupported type for key '{key}': {type(value).__name__}"
             case "mma_kind":
-                if not isinstance(value, iree_gpu.MMAAttr):
+                if not isinstance(value, (iree_gpu.MMAAttr, iree_gpu.VirtualMMAAttr)):
                     assert (
                         False
                     ), f"Unsupported type for key '{key}': {type(value).__name__}"
@@ -348,7 +357,8 @@ def link_tuning_specs(tuner_ctx: TunerContext, td_specs: list[ir.Module]) -> ir.
     into one tuning spec.
     """
     module = combine_tuning_specs(tuner_ctx, td_specs)
-    iree_opt = ireec.binaries.find_tool("iree-opt")
+    iree_opt = ireec.binaries.find_tool("iree-opt")  # type: ignore
+    assert iree_opt, "iree-opt tool not found"
 
     if len(td_specs) == 1:
         # avoid unnessary link overhead.

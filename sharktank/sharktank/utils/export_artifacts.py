@@ -17,13 +17,12 @@ import numpy as np
 import torch
 from sharktank.utils.iree import get_iree_compiler_flags_from_object
 from sharktank.utils.evaluate import *
+from sharktank.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from sharktank.layers import LlamaModelConfig
 
-logger = logging.getLogger("eval")
-
-logger.setLevel(logging.INFO)
+logger = get_logger(__name__)
 
 logger.root.handlers[0].setFormatter(
     logging.Formatter(fmt="\n%(levelname)s:%(name)-8s %(message)s")
@@ -101,14 +100,14 @@ class ExportArtifacts:
         irpa_path: str | Path,
         attention_kernel: str | None = None,
         matmul_kernel: str | None = None,
+        use_shuffled_kernel: bool = False,
         tensor_parallelism_size: int,
         pipeline_parallelism_size: int,
         block_seq_stride: int,
         iree_hal_target_device: str,
         iree_hip_target: str | None = None,
         iree_hal_local_target_device_backends: str | None = None,
-        use_attention_mask: bool = False,
-        use_hf: bool = False,
+        interleave_rotary: bool = True,
         activation_dtype: str = "float16",
         attention_dtype: str = "float16",
         kv_cache_dtype: Optional[str | Path] = None,
@@ -140,11 +139,10 @@ class ExportArtifacts:
             self.tensor_parallelism_size * self.pipeline_parallelism_size
         )
         self.block_seq_stride = block_seq_stride
-        self.use_attention_mask = use_attention_mask
         self.activation_dtype = activation_dtype
         self.attention_dtype = attention_dtype
         self.kv_cache_dtype = kv_cache_dtype
-        self.use_hf = use_hf
+        self.interleave_rotary = interleave_rotary
         self.hip_device_id = hip_device_id
         self.use_qk_norm = use_qk_norm
         self.attention_chunk_size = attention_chunk_size
@@ -187,10 +185,11 @@ class ExportArtifacts:
         return ExportArtifacts(
             attention_kernel=config.attention_kernel,
             matmul_kernel=config.matmul_kernel,
+            use_shuffled_kernel=config.use_shuffled_kernel,
             tensor_parallelism_size=config.tensor_parallelism_size,
             pipeline_parallelism_size=config.pipeline_parallelism_size,
             block_seq_stride=config.block_seq_stride,
-            use_hf=config.use_hf,
+            interleave_rotary=config.hp.rope_interleave_emb,
             activation_dtype=properties["activation_dtype"],
             attention_dtype=properties["attention_dtype"],
             kv_cache_dtype=kv_cache_dtype,
@@ -340,8 +339,6 @@ class ExportArtifacts:
             f"--bs-prefill={batch_size}",
             f"--bs-decode={batch_size}",
             f"--block-seq-stride={self.block_seq_stride}",
-            f"--attention-dtype={self.attention_dtype}",
-            f"--activation-dtype={self.activation_dtype}",
             f"--tensor-parallelism-size={self.tensor_parallelism_size}",
             f"--pipeline-parallelism-size={self.pipeline_parallelism_size}",
         ]
@@ -351,13 +348,15 @@ class ExportArtifacts:
         if self.matmul_kernel is not None:
             export_args.append(f"--matmul-kernel='{self.matmul_kernel}'")
 
+        if self.attention_dtype is not None:
+            export_args.append(f"--attention-dtype={self.attention_dtype}")
+        if self.activation_dtype is not None:
+            export_args.append(f"--activation-dtype={self.activation_dtype}")
         if self.kv_cache_dtype is not None:
             export_args.append(f"--kv-cache-dtype={self.kv_cache_dtype}")
         if skip_decode:
             export_args.append("--skip-decode")
-        if self.use_attention_mask:
-            export_args.append("--use-attention-mask")
-        if self.use_hf:
+        if not self.interleave_rotary:
             export_args.append("--use-hf")
         if self.use_qk_norm:
             export_args.append("--use-qk-norm")
@@ -412,6 +411,7 @@ class ExportArtifacts:
             "--iree-hal-indirect-command-buffers=true",
             "--iree-stream-resource-memory-model=discrete",
             "--iree-hal-memoization=true",
+            "--iree-hip-encoding-layout-resolver=data-tiling",
         ]
 
         # TODO: https://github.com/iree-org/iree/issues/21068

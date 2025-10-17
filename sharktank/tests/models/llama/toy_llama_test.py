@@ -7,12 +7,24 @@
 import pytest
 import torch
 import unittest
+import iree
 
-
-from sharktank.models.llm import *
-from sharktank.models.llama.toy_llama import generate
+from sharktank.models.llama.testing import quantize_theta_to_fp4
+from sharktank.models.llama.toy_llama import generate, generate2
+from sharktank.types import (
+    DynamicFp4BlockQuantizer,
+    InferenceTensorTransforms,
+)
+from sharktank.models.llm.testing import (
+    make_random_token_sequences,
+    run_perplexity_test_pipeline_parallel_eager_vs_eager,
+)
 from sharktank.utils.llm_artifacts import LlmArtifactBuilder, ExportConfig
-from sharktank.utils.llm_utils import LlmInstance, TorchInstance, llama_config_page_size
+from sharktank.utils.llm_utils import (
+    LlmInstance,
+    TorchInstance,
+    llama_config_page_sizes,
+)
 from sharktank.utils.testing import is_cpu
 
 
@@ -37,12 +49,12 @@ class ToyLlamaTest(unittest.TestCase):
         theta, config = generate(12345)
 
         model = TorchInstance(theta=theta, config=config)
-        page_size = llama_config_page_size(config)
+        page_sizes = llama_config_page_sizes(config)
         block_count = 128
 
         self._instance = LlmInstance(
             model_instance=model,
-            page_size=page_size,
+            page_sizes=page_sizes,
             block_seq_stride=config.block_seq_stride,
             block_count=block_count,
         )
@@ -79,13 +91,24 @@ class ToyLlamaTest(unittest.TestCase):
 
 @pytest.mark.usefixtures("iree_flags")
 @is_cpu
-class ToyLlamaIreeTest(unittest.TestCase):
-    def setUp(self):
+@pytest.mark.parametrize(
+    "use_extend_attention",
+    [
+        True,
+        False,
+    ],
+)
+class TestToyLlamaIree:
+    @pytest.fixture(scope="function", autouse=True)
+    def setUp(self, use_extend_attention):
         torch.set_default_dtype(torch.float32)
         theta, llama_config = generate(12345)
         llm_artifact = LlmArtifactBuilder(theta=theta, llama_config=llama_config)
 
-        export_config = ExportConfig(logits_normalization="log_softmax")
+        export_config = ExportConfig(
+            logits_normalization="log_softmax",
+            use_extend_attention=use_extend_attention,
+        )
         llm_artifact.export(export_config)
 
         compiler_flags = get_iree_compile_flags(self)
@@ -93,12 +116,12 @@ class ToyLlamaIreeTest(unittest.TestCase):
 
         iree_instance = llm_artifact.instance([self.iree_device])
 
-        page_size = llama_config_page_size(llama_config)
+        page_sizes = llama_config_page_sizes(llama_config)
         block_count = 128
 
         self._instance = LlmInstance(
             model_instance=iree_instance,
-            page_size=page_size,
+            page_sizes=page_sizes,
             block_seq_stride=llama_config.block_seq_stride,
             block_count=block_count,
         )
@@ -122,3 +145,48 @@ class ToyLlamaIreeTest(unittest.TestCase):
         result = decoder.decode_cross_entropy([seq])[0]
         assert result.valid
         torch.testing.assert_close(result.score, 0.583, atol=1e-2, rtol=1e-2)
+
+
+def test_toy_llama3_f4_pipeline_parallel_eager_vs_eager_perplexity(
+    deterministic_random_seed,
+):
+    """Verify that a pipeline-parallel toy Llama 3 model produces the
+    same perplexity as a the reference variant that is not pipeline-parallel."""
+
+    # We run specifically on CPU because as of 09/29/2025 there is no PyTorch
+    # ROCm wheel release for gfx950 (MI350) AMD GPUs. It needs ROCm 7. Current is 6.4.
+    # IREE is unable to compile on gfx942 (MI300X) the KV cache gather kernel.
+    # More specifically iree_linalg_ext.gather.
+    # error: 'hal.interface.binding.subspan' op F8E5M2 and F8E4M3FN types are not supported on gfx942 (MI-300) or older chipsets; try F8E5M2FNUZ or F8E4M3FNUZ instead.
+    # This is probably expected if gfx942 really does not support this.
+    device = torch.device("cpu")
+
+    batch_size = 2
+    pipeline_parallelism_size = 2
+
+    reference_theta, reference_config = generate2(seed=0)
+
+    reference_config.kv_cache_dtype = torch.float8_e4m3fn
+    reference_config.device = device
+    reference_theta = reference_theta.transform(
+        InferenceTensorTransforms.to_device(device)
+    )
+    reference_theta = quantize_theta_to_fp4(
+        reference_theta,
+        quantizer=DynamicFp4BlockQuantizer(
+            block_size=batch_size, use_sharktank_kernel=False
+        ),
+    )
+
+    tokens = make_random_token_sequences(
+        num_sequences=batch_size,
+        min_tokens_per_sequence=3,
+        max_tokens_per_sequence=3,
+        vocabulary_size=reference_config.hp.vocab_size,
+    )
+    run_perplexity_test_pipeline_parallel_eager_vs_eager(
+        reference_theta=reference_theta,
+        reference_config=reference_config,
+        tokens=tokens,
+        pipeline_parallelism_size=pipeline_parallelism_size,
+    )

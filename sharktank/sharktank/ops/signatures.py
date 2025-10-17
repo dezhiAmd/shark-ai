@@ -34,18 +34,25 @@ from ._registry import *
 __all__ = [
     "all_gather",
     "all_reduce",
+    "arange",
     "argmax",
+    "attention_mask",
+    "attention_mask_for_decode",
     "barrier_on_logical_device",
     "cat",
+    "chunk",
+    "chunked_attention_mask",
     "conv2d",
     "conv3d",
     "conv1d",
+    "cos",
     "dequantize",
     "einsum_2args",
     "elementwise",
     "embedding_lookup",
     "equal",
     "expand",
+    "extend_attention",
     "extract_slice",
     "flatten",
     "gather",
@@ -57,6 +64,7 @@ __all__ = [
     "index_copy_",
     "index_put_",
     "index_select",
+    "input_mask",
     "interpolate",
     "linear",
     "masked_fill",
@@ -82,6 +90,7 @@ __all__ = [
     "sharded_gather",
     "shards",
     "sigmoid",
+    "sin",
     "softmax",
     "split",
     "squeeze",
@@ -95,6 +104,7 @@ __all__ = [
     "unflatten",
     "unpack",
     "unpack_qs",
+    "unpack_to_qs",
     "unshard",
     "unsqueeze",
     "view",
@@ -142,6 +152,20 @@ def _all_reduce_trampoline(d: SignatureDispatcher, tensor: AnyTensor):
         d.fail(tensors)
 
 
+@overridable(dispatch_args=(), is_trivially_replicable=False)
+def arange(
+    *args,
+    devices: Sequence[int] | None = None,
+    **kwargs,
+) -> AnyTensor:
+    """
+    See torch.arange. If devices is given, returns a ReplicatedTensor.
+
+    When devices is provided, shards are identical (but created independently).
+    """
+    ...
+
+
 @overridable(dispatch_args=("tensor",))
 def argmax(
     tensor: AnyTensor,
@@ -150,6 +174,63 @@ def argmax(
     chunk_size: Optional[int] = None,
 ) -> AnyTensor:
     "Take argmax of the tensor"
+    ...
+
+
+@overridable
+def attention_mask(
+    boolean_input_mask: AnyTensor,
+    start_positions: AnyTensor | None = None,
+    *,
+    source_len: int,
+    target_len: int,
+    attention_dtype: torch.dtype,
+) -> torch.Tensor:
+    """
+    Generates a causal attention mask of [bs, 1, sl, sl] of activation dtype.
+
+    All masked positions are -inf and unmasked are 0.0.
+
+    The causal context mask will either be generated or use the initialization time buffer.
+    Since this is a bool tensor of context_length^2, different deployment
+    scenarios can benefit from managing this in different ways.
+    """
+    ...
+
+
+@attention_mask.trampoline
+def _attention_mask_trampoline(
+    d: SignatureDispatcher,
+    boolean_input_mask: AnyTensor,
+    start_positions: AnyTensor | None = None,
+    *,
+    source_len: int,
+    target_len: int,
+    attention_dtype: torch.dtype,
+):
+    tensors = [boolean_input_mask]
+    if start_positions is not None:
+        tensors.append(start_positions)
+    for override in d.find_overrides(tensors):
+        result = override(
+            boolean_input_mask,
+            start_positions,
+            source_len=source_len,
+            target_len=target_len,
+            attention_dtype=attention_dtype,
+        )
+        if result is not NotImplemented:
+            return override, result
+    else:
+        d.fail(tensors)
+
+
+@overridable(dispatch_args=(0,))
+def attention_mask_for_decode(
+    boolean_input_mask: AnyTensor,
+    *,
+    attention_dtype: torch.dtype,
+) -> torch.Tensor:
     ...
 
 
@@ -168,6 +249,32 @@ def _cat_trampoline(
             return override, result
     else:
         d.fail(tensors)
+
+
+@overridable(dispatch_args=(0,))
+def chunk(tensor: AnyTensor, chunks: int, dim: int = 0) -> tuple[AnyTensor, ...]:
+    """See torch.chunk"""
+    ...
+
+
+@overridable(dispatch_args=(0,))
+def chunked_attention_mask(
+    attention_mask: torch.Tensor, attention_chunk_size: int
+) -> torch.Tensor:
+    """
+    Apply a chunked attention mask onto a mask.
+
+    This is a convenience function that combines the creation of the boolean
+    chunked attention mask and its application to the provided attention mask.
+
+    Args:
+        attention_mask: The original attention mask of shape [bs, 1, sl, sl].
+        attention_chunk_size: The size of each attention chunk.
+
+    Returns:
+        A new attention mask with chunked masking applied.
+    """
+    ...
 
 
 @overridable
@@ -324,6 +431,12 @@ def _conv1d_trampoline(
             return override, result
     else:
         d.fail(tensors)
+
+
+@overridable(dispatch_args=(0,))
+def cos(tensor: AnyTensor) -> AnyTensor:
+    """See torch.cos"""
+    ...
 
 
 @overridable
@@ -581,6 +694,20 @@ def index_select(tensor: AnyTensor, dim: int, index: AnyTensor) -> AnyTensor:
 
 
 @overridable(dispatch_args=(0,))
+def input_mask(seq_lens: AnyTensor, batch_seqlen: int) -> AnyTensor:
+    """
+    Compute a boolean input mask for a batch of sequence lengths.
+
+    The mask will be [bs, batch_seqlen] with True at any position that is masked.
+
+    Args:
+        seq_lens: [bs] tensor of integers representing the sequence lengths.
+        batch_seqlen: The maximum sequence length in the batch.
+    """
+    ...
+
+
+@overridable(dispatch_args=(0,))
 def interpolate(
     input: AnyTensor,
     size: Optional[int | List[int]] = None,
@@ -819,6 +946,22 @@ def scaled_dot_product_attention(
     raise NotImplementedError
 
 
+@overridable(dispatch_args=("q", "k", "v"))
+def extend_attention(
+    q: AnyTensor,
+    k: AnyTensor,
+    v: AnyTensor,
+    kv_cache: Optional[AnyTensor] = None,
+    page_ids: Optional[AnyTensor] = None,
+    start_positions: Optional[AnyTensor] = None,
+    seq_lens: Optional[AnyTensor] = None,
+    *,
+    impl: Optional[str] = None,
+) -> AnyTensor:
+    """Computes the extend attention using QKV."""
+    raise NotImplementedError
+
+
 @overridable(dispatch_args=(0,))
 def reshape(input: AnyTensor, shape: List[int]) -> AnyTensor:
     """Returns a tensor with the same data and number of elements as input, but with
@@ -948,6 +1091,12 @@ def sigmoid(tensor: AnyTensor) -> AnyTensor:
 
 
 @overridable(dispatch_args=(0,))
+def sin(tensor: AnyTensor) -> AnyTensor:
+    """See torch.sin"""
+    ...
+
+
+@overridable(dispatch_args=(0,))
 def softmax(
     tensor: AnyTensor, dim: Optional[int] = None, dtype: Optional[torch.dtype] = None
 ) -> AnyTensor:
@@ -1025,7 +1174,7 @@ def unflatten(input: AnyTensor, dim: int, sizes: Tuple[int]) -> AnyTensor:
     ...
 
 
-@overridable(dispatch_args=(0,))
+@overridable(dispatch_args=(0,), is_trivially_replicable=False)
 def unpack(input: AnyTensor) -> QuantizedLayout:
     ...
 
@@ -1033,6 +1182,11 @@ def unpack(input: AnyTensor) -> QuantizedLayout:
 @overridable(dispatch_args=(0, 1))
 def unpack_qs(qs: AnyTensor, layout: BlockScaledPackedLayout) -> AnyTensor:
     """Return the unpacked unscaled/quantized values of a block scales packed layout."""
+    ...
+
+
+@overridable(dispatch_args=(0,))
+def unpack_to_qs(input: AnyTensor) -> AnyTensor:
     ...
 
 
