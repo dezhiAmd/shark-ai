@@ -10,17 +10,12 @@
 #include "iree/base/tracing.h"
 #include "shortfin/support/api.h"
 #include "spdlog/spdlog.h"
+#include "spdlog/fmt/fmt.h"
+
+extern bool SHORTFIN_SCHED_LOG_ENABLED;
 
 #if !defined(SHORTFIN_LOG_LIFETIMES)
 #define SHORTFIN_LOG_LIFETIMES 0
-#endif
-
-// Scheduler logging.
-#define SHORTFIN_SCHED_LOG_ENABLED 0
-#if SHORTFIN_SCHED_LOG_ENABLED
-#define SHORTFIN_SCHED_LOG(...) shortfin::logging::info("SCHED: " __VA_ARGS__)
-#else
-#define SHORTFIN_SCHED_LOG(...)
 #endif
 
 // Tracing macros. These are currently just aliases of the underlying IREE
@@ -59,5 +54,12 @@ inline void destruct(const char *type_name, T *) {}
 #endif
 
 }  // namespace shortfin::logging
+
+template <typename... Args>
+inline void SHORTFIN_SCHED_LOG(fmt::format_string<Args...> fmt, Args&&... args) {
+  if (SHORTFIN_SCHED_LOG_ENABLED) {
+    spdlog::info("SCHED: " + fmt::format(fmt, std::forward<Args>(args)...));
+  }
+}
 
 #endif  // SHORTFIN_SUPPORT_LOGGING_H
