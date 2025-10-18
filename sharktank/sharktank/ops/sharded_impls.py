@@ -52,6 +52,21 @@ from sharktank.utils.math import ceildiv
 from .signatures import *
 
 
+@arange.override()
+def arange_replicated(
+    *args,
+    devices: Sequence[int] | None = None,
+    **kwargs,
+):
+    if devices is None:
+        return NotImplemented
+
+    # Do not use `tranfer_to_logical_device` here.
+    # Adding the transfer op would prevent the arange result from being fused.
+    shards = [arange(*args, **kwargs) for _ in devices]
+    return ReplicatedTensor(ts=shards, devices=tuple(devices))
+
+
 def assert_on_same_devices(*tensors: Tuple[ShardedTensor]) -> None:
     """
     Checks that all tensors are placed on the same devices.
@@ -269,28 +284,6 @@ def argmax_split(
 ):
     shards = [argmax(shard, dim, keepdim, chunk_size) for shard in tensor.shards]
     return SplitPrimitiveTensor(ts=shards, shard_dim=tensor.shard_dim)
-
-
-def attention_mask_replicated(
-    boolean_input_mask: ReplicatedTensor,
-    start_positions: ReplicatedTensor | None,
-    *,
-    attention_dtype: torch.dtype,
-) -> ReplicatedTensor:
-    start_pos_shards = [None] * len(boolean_input_mask.shards)
-    if start_positions is not None:
-        start_pos_shards = start_positions.shards
-
-    shards = [
-        attention_mask(bool_mask, start_pos, attention_dtype=attention_dtype)
-        for bool_mask, start_pos in zip(boolean_input_mask.shards, start_pos_shards)
-    ]
-
-    return ReplicatedTensor(ts=shards, devices=boolean_input_mask.devices)
-
-
-attention_mask.override(ReplicatedTensor, ReplicatedTensor)(attention_mask_replicated)
-attention_mask.override(ReplicatedTensor)(attention_mask_replicated)
 
 
 @cat.override(AllOfType(SplitPrimitiveTensor))

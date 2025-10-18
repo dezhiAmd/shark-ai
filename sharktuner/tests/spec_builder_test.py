@@ -8,8 +8,6 @@
 Usage: python -m pytest spec_builder_test.py
 """
 
-import pytest
-
 # TODO: remove after https://github.com/llvm/llvm-project/pull/117918 is resolved.
 import sharktuner
 from iree.compiler.dialects import iree_codegen  # type: ignore
@@ -24,7 +22,7 @@ from sharktuner import spec_builder
 from sharktuner.test_utils import tuner_ctx
 
 
-def create_generic_module(tuner_ctx: common.TunerContext) -> None:
+def create_generic_module(tuner_ctx: common.TunerContext) -> ir.Module:
     ctx = tuner_ctx.mlir_ctx
     with ir.Location.unknown(ctx):
         module = ir.Module.create()

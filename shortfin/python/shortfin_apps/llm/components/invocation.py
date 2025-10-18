@@ -171,7 +171,7 @@ class PrefillTask(LlmTask):
     def _get_block_count(
         self, batch_seq_len: int, task_inputs: List[LlmTaskInput]
     ) -> int:
-        if self._chunk_block_size is None:
+        if not self._has_prefill_position:
             return max(task_input.block_count for task_input in task_inputs)
 
         seq_stride = self._seq_stride
@@ -180,12 +180,10 @@ class PrefillTask(LlmTask):
         )
         # Number of blocks we're writing to
         write_block_span = batch_seq_len // seq_stride
-        # Align the max start position down to the nearest chunk
-        max_chunk_start = (
-            max_start_position // self._chunk_block_size
-        ) * self._chunk_block_size
+        # Calculate block offset based on the maximum start position
+        max_block_start = max_start_position // seq_stride
         # Prevent overflow in write page ids
-        block_count = max_chunk_start + write_block_span
+        block_count = max_block_start + write_block_span
         return block_count
 
     async def prepare_args(
@@ -221,12 +219,19 @@ class PrefillTask(LlmTask):
         array_cache = self._array_cache
         int_dtype = sfnp.int64
 
-        # Acquire buffers for the arguments.
-        tokens_allocation = array_cache.allocate([batch_size, batch_seq_len], int_dtype)
-        seq_lens_allocation = array_cache.allocate([batch_size], int_dtype)
-        seq_block_ids_allocation = array_cache.allocate(
-            [batch_size, block_count], int_dtype
-        )
+        try:
+            # Acquire buffers for the arguments.
+            tokens_allocation = array_cache.allocate(
+                [batch_size, batch_seq_len], int_dtype
+            )
+            seq_lens_allocation = array_cache.allocate([batch_size], int_dtype)
+            seq_block_ids_allocation = array_cache.allocate(
+                [batch_size, block_count], int_dtype
+            )
+        except Exception as e:
+            error_msg = f"Device buffer allocation failed for prefill: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
         # Prepare data for argument buffers
         tokens_data = list(
@@ -250,7 +255,15 @@ class PrefillTask(LlmTask):
                 task.start_position is not None for task in task_inputs
             ), "`start_positions` must be defined for `Prefill` when `has_prefill_position` is True."
             start_positions = [task.start_position for task in task_inputs]
-            start_positions_allocation = array_cache.allocate([batch_size], int_dtype)
+            try:
+                start_positions_allocation = array_cache.allocate(
+                    [batch_size], int_dtype
+                )
+            except Exception as e:
+                error_msg = "Failed to allocate device buffer: start_positions"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg) from e
+
             buffers.append(start_positions_allocation)
             data.append(start_positions)
             defaults.append(0)
@@ -324,13 +337,18 @@ class DecodeTask(LlmTask):
         array_cache = self._array_cache
         int_dtype = sfnp.int64
 
-        # Acquire buffers for the arguments.
-        tokens_allocation = array_cache.allocate([batch_size, 1], int_dtype)
-        start_positions_allocation = array_cache.allocate([batch_size], int_dtype)
-        seq_lens_allocation = array_cache.allocate([batch_size], int_dtype)
-        seq_block_ids_allocation = array_cache.allocate(
-            [batch_size, block_count], int_dtype
-        )
+        try:
+            # Acquire buffers for the arguments.
+            tokens_allocation = array_cache.allocate([batch_size, 1], int_dtype)
+            start_positions_allocation = array_cache.allocate([batch_size], int_dtype)
+            seq_lens_allocation = array_cache.allocate([batch_size], int_dtype)
+            seq_block_ids_allocation = array_cache.allocate(
+                [batch_size, block_count], int_dtype
+            )
+        except Exception as e:
+            error_msg = f"Device buffer allocation failed for decode: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
         # Prepare data for argument buffers
         tokens_data = list(chain.from_iterable(t[-1:] for t in tokens))

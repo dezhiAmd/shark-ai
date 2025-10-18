@@ -44,6 +44,18 @@ from .signatures import *
 import iree.turbine.ops.iree
 
 
+@arange.override()
+def arange_default(
+    *args,
+    devices: Sequence[int] | None = None,
+    **kwargs,
+) -> DefaultPrimitiveTensor:
+    if devices is not None:  # Replicated variant should be used.
+        return NotImplemented
+
+    return DefaultPrimitiveTensor(data=torch.arange(*args, **kwargs))
+
+
 @argmax.override(Tensor)
 def argmax_default(
     x: Tensor,
@@ -102,6 +114,8 @@ def attention_mask_default(
     boolean_input_mask: torch.Tensor,
     start_positions: torch.Tensor | None,
     *,
+    source_len: int,
+    target_len: int,
     attention_dtype: torch.dtype,
 ) -> torch.Tensor:
     device = boolean_input_mask.device
@@ -110,11 +124,9 @@ def attention_mask_default(
     dtype = (
         torch.float32 if attention_dtype == torch.float8_e4m3fnuz else attention_dtype
     )
-    _, batch_seq_len = boolean_input_mask.shape
-
     causal_mask = create_causal_context_mask(
-        src_len=batch_seq_len,
-        target_len=batch_seq_len,
+        src_len=source_len,
+        target_len=target_len,
         start_positions=start_positions,
         device=device,
     )
@@ -153,6 +165,13 @@ def cat_default(tensors: Sequence[Tensor | PrimitiveTensor], dim: int):
     if isinstance(tensors[0], PrimitiveTensor):
         result = DefaultPrimitiveTensor(data=result)
     return result
+
+
+@chunk.override(Tensor)
+def chunk_default(
+    tensor: Tensor | PrimitiveTensor, chunks: int, dim: int = 0
+) -> tuple[Tensor, ...]:
+    return torch.chunk(unbox_tensor(tensor), chunks, dim)
 
 
 @chunked_attention_mask.override(Tensor)
@@ -903,7 +922,8 @@ def swiglu_default(
         x_glu = x_glu.clamp(min=None, max=limit)
         x_lin = x_lin.clamp(min=-limit, max=limit)
     # SwiGLU: swish(alpha * a) * (b + 1)
-    out_glu = x_glu * torch.sigmoid(alpha * x_glu)
+    alpha = torch.tensor(alpha, dtype=x.dtype)
+    out_glu = x_glu * sigmoid(alpha * x_glu)
     return out_glu * (x_lin + 1)
 
 

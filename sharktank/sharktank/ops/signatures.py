@@ -34,11 +34,13 @@ from ._registry import *
 __all__ = [
     "all_gather",
     "all_reduce",
+    "arange",
     "argmax",
     "attention_mask",
     "attention_mask_for_decode",
     "barrier_on_logical_device",
     "cat",
+    "chunk",
     "chunked_attention_mask",
     "conv2d",
     "conv3d",
@@ -50,6 +52,7 @@ __all__ = [
     "embedding_lookup",
     "equal",
     "expand",
+    "extend_attention",
     "extract_slice",
     "flatten",
     "gather",
@@ -149,6 +152,20 @@ def _all_reduce_trampoline(d: SignatureDispatcher, tensor: AnyTensor):
         d.fail(tensors)
 
 
+@overridable(dispatch_args=(), is_trivially_replicable=False)
+def arange(
+    *args,
+    devices: Sequence[int] | None = None,
+    **kwargs,
+) -> AnyTensor:
+    """
+    See torch.arange. If devices is given, returns a ReplicatedTensor.
+
+    When devices is provided, shards are identical (but created independently).
+    """
+    ...
+
+
 @overridable(dispatch_args=("tensor",))
 def argmax(
     tensor: AnyTensor,
@@ -160,11 +177,13 @@ def argmax(
     ...
 
 
-@overridable(is_trivially_replicable=False)
+@overridable
 def attention_mask(
     boolean_input_mask: AnyTensor,
     start_positions: AnyTensor | None = None,
     *,
+    source_len: int,
+    target_len: int,
     attention_dtype: torch.dtype,
 ) -> torch.Tensor:
     """
@@ -185,6 +204,8 @@ def _attention_mask_trampoline(
     boolean_input_mask: AnyTensor,
     start_positions: AnyTensor | None = None,
     *,
+    source_len: int,
+    target_len: int,
     attention_dtype: torch.dtype,
 ):
     tensors = [boolean_input_mask]
@@ -192,7 +213,11 @@ def _attention_mask_trampoline(
         tensors.append(start_positions)
     for override in d.find_overrides(tensors):
         result = override(
-            boolean_input_mask, start_positions, attention_dtype=attention_dtype
+            boolean_input_mask,
+            start_positions,
+            source_len=source_len,
+            target_len=target_len,
+            attention_dtype=attention_dtype,
         )
         if result is not NotImplemented:
             return override, result
@@ -224,6 +249,12 @@ def _cat_trampoline(
             return override, result
     else:
         d.fail(tensors)
+
+
+@overridable(dispatch_args=(0,))
+def chunk(tensor: AnyTensor, chunks: int, dim: int = 0) -> tuple[AnyTensor, ...]:
+    """See torch.chunk"""
+    ...
 
 
 @overridable(dispatch_args=(0,))
@@ -912,6 +943,22 @@ def scaled_dot_product_attention(
     impl: Optional[str] = None,
 ) -> AnyTensor:
     """Computes the scaled dot product attention using QKV."""
+    raise NotImplementedError
+
+
+@overridable(dispatch_args=("q", "k", "v"))
+def extend_attention(
+    q: AnyTensor,
+    k: AnyTensor,
+    v: AnyTensor,
+    kv_cache: Optional[AnyTensor] = None,
+    page_ids: Optional[AnyTensor] = None,
+    start_positions: Optional[AnyTensor] = None,
+    seq_lens: Optional[AnyTensor] = None,
+    *,
+    impl: Optional[str] = None,
+) -> AnyTensor:
+    """Computes the extend attention using QKV."""
     raise NotImplementedError
 
 
