@@ -107,7 +107,11 @@ class SHORTFIN_API storage : public local::ProgramInvocationMarshalable {
 
   // Performs either a d2h, h2d or d2d transfer from a source storage to this
   // storage.
-  local::VoidFuture copy_from(storage &source_storage);
+  void copy_from(storage &source_storage);
+
+  // Performs either a d2h, h2d or d2d async transfer from a source storage to this
+  // storage.
+  local::VoidFuture copy_from_async(storage &source_storage);
 
   iree_device_size_t byte_length() const {
     return iree_hal_buffer_byte_length(buffer_.get());

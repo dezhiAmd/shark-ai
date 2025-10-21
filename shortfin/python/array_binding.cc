@@ -26,6 +26,18 @@ static const char DOCSTRING_ARRAY_COPY_TO[] =
 Equivalent to `dest_array.storage.copy_from(source_array.storage)`.
 )";
 
+static const char DOCSTRING_ARRAY_COPY_FROM_ASYNC[] =
+    R"(Copy contents from a source array to this array.
+
+Equivalent to `dest_array.storage.copy_from_async(source_array.storage)`.
+)";
+
+static const char DOCSTRING_ARRAY_COPY_TO_ASYNC[] =
+    R"(Copy contents this array to a destination array.
+
+Equivalent to `dest_array.storage.copy_from_async(source_array.storage)`.
+)";
+
 static const char DOCSTRING_ARRAY_FILL[] = R"(Fill an array with a value.
 
 Note that `fill` is asynchronous and may not be visible immediately. For immediate
@@ -464,9 +476,11 @@ void BindArray(py::module_ &m) {
           },
           py::arg("pattern"), DOCSTRING_STORAGE_FILL)
       .def(
-          "copy_from",
+          "copy_from", [](storage &self, storage &src) { self.copy_from(src); },
+
+          "copy_from_async",
           [](storage &self, storage &src) {
-            auto res = self.copy_from(src);
+            auto res = self.copy_from_async(src);
             py::object future = py::cast(res, py::rv_policy::move);
             return future;
           },
@@ -626,22 +640,26 @@ void BindArray(py::module_ &m) {
             self.attr("storage").attr("fill")(buffer);
           },
           py::arg("pattern"), DOCSTRING_ARRAY_FILL)
+     .def("copy_from", &device_array::copy_from, py::arg("source_array"),
+           DOCSTRING_ARRAY_COPY_FROM)
+      .def("copy_to", &device_array::copy_to, py::arg("dest_array"),
+           DOCSTRING_ARRAY_COPY_TO)
       .def(
-          "copy_from",
+          "copy_from_async",
           [](device_array &self, device_array &src) {
-            auto res = self.copy_from(src);
+            auto res = self.copy_from_async(src);
             py::object future = py::cast(res, py::rv_policy::move);
             return future;
           },
-          py::arg("source_array"), DOCSTRING_ARRAY_COPY_FROM)
+          py::arg("source_array"), DOCSTRING_ARRAY_COPY_FROM_ASYNC)
       .def(
-          "copy_to",
+          "copy_to_async",
           [](device_array &self, device_array &src) {
-            auto res = self.copy_to(src);
+            auto res = self.copy_to_async(src);
             py::object future = py::cast(res, py::rv_policy::move);
             return future;
           },
-          py::arg("dest_array"), DOCSTRING_ARRAY_COPY_TO)
+          py::arg("dest_array"), DOCSTRING_ARRAY_COPY_TO_ASYNC)
       .def("view", PyDeviceArrayView, DOCSTRING_ARRAY_VIEW)
       .def(
           "map",

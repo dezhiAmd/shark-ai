@@ -1,0 +1,63 @@
+diff --git a/shortfin/src/shortfin/support/logging.cc b/shortfin/src/shortfin/support/logging.cc
+index 668ba7812..b8a8f1944 100644
+--- a/shortfin/src/shortfin/support/logging.cc
++++ b/shortfin/src/shortfin/support/logging.cc
+@@ -4,14 +4,18 @@
+ // See https://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ 
++#include <cstdlib>
+ #include "shortfin/support/logging.h"
+ 
+ #include "spdlog/cfg/env.h"
+ 
++bool SHORTFIN_SCHED_LOG_ENABLED=false;
++
+ namespace shortfin::logging {
+ 
+ void InitializeFromEnv() {
+-  // TODO: Also support our own env vars.
++  const char* env = std::getenv("SHORTFIN_SCHED_LOG_ENABLED");
++  SHORTFIN_SCHED_LOG_ENABLED = (env != nullptr && std::string(env) == "1");
+   spdlog::cfg::load_env_levels();
+ }
+ 
+diff --git a/shortfin/src/shortfin/support/logging.h b/shortfin/src/shortfin/support/logging.h
+index e70c54e99..81bcc5243 100644
+--- a/shortfin/src/shortfin/support/logging.h
++++ b/shortfin/src/shortfin/support/logging.h
+@@ -10,19 +10,14 @@
+ #include "iree/base/tracing.h"
+ #include "shortfin/support/api.h"
+ #include "spdlog/spdlog.h"
++#include "spdlog/fmt/fmt.h"
++
++extern bool SHORTFIN_SCHED_LOG_ENABLED
+ 
+ #if !defined(SHORTFIN_LOG_LIFETIMES)
+ #define SHORTFIN_LOG_LIFETIMES 0
+ #endif
+ 
+-// Scheduler logging.
+-#define SHORTFIN_SCHED_LOG_ENABLED 0
+-#if SHORTFIN_SCHED_LOG_ENABLED
+-#define SHORTFIN_SCHED_LOG(...) shortfin::logging::info("SCHED: " __VA_ARGS__)
+-#else
+-#define SHORTFIN_SCHED_LOG(...)
+-#endif
+-
+ // Tracing macros. These are currently just aliases of the underlying IREE
+ // macros, but we maintain the ability to redirect them in the future (i.e.
+ // for certain kinds of library builds, etc).
+@@ -60,4 +55,11 @@ inline void destruct(const char *type_name, T *) {}
+ 
+ }  // namespace shortfin::logging
+ 
++template <typename... Args>
++inline void SHORTFIN_SCHED_LOG(fmt::format_string<Args...> fmt, Args&&... args) {
++  if (SHORTFIN_SCHED_LOG_ENABLED) {
++    spdlog::info("SCHED: " + fmt::format(fmt, std::forward<Args>(args)...));
++  }
++}
++
+ #endif  // SHORTFIN_SUPPORT_LOGGING_H

@@ -154,7 +154,40 @@ void storage::fill(const void *pattern, iree_host_size_t pattern_length) {
       });
 }
 
-VoidFuture storage::copy_from(storage &source_storage) {
+void storage::copy_from(storage &source_storage) {
+  device_.fiber().scheduler().AppendCommandBuffer(
+      device_, TransactionType::TRANSFER, [&](Account &account) {
+        // Must depend on the source's mutation dependencies to avoid
+        // read-before-write hazard.
+        account.active_deps_extend(
+            source_storage.timeline_resource_->mutation_barrier());
+        // And depend on our own use and mutations dependencies.
+        account.active_deps_extend(timeline_resource_->use_barrier());
+
+        SHORTFIN_SCHED_LOG("  : CopyBuffer({} -> {})",
+                           static_cast<void *>(source_storage.buffer_.get()),
+                           static_cast<void *>(buffer_.get()));
+        SHORTFIN_THROW_IF_ERROR(iree_hal_command_buffer_copy_buffer(
+            account.active_command_buffer(),
+            /*source_ref=*/
+            iree_hal_make_buffer_ref(source_storage.buffer_, 0, byte_length()),
+            /*target_ref=*/
+            iree_hal_make_buffer_ref(buffer_, 0, byte_length()),
+            IREE_HAL_COPY_FLAG_NONE));
+
+        // Move our own use and mutation barrier to the current pending timeline
+        // value.
+        timeline_resource_->set_mutation_barrier(
+            account.timeline_sem(), account.timeline_idle_timepoint());
+        timeline_resource_->use_barrier_insert(
+            account.timeline_sem(), account.timeline_idle_timepoint());
+        // And extend the source use barrier.
+        source_storage.timeline_resource_->use_barrier_insert(
+            account.timeline_sem(), account.timeline_idle_timepoint());
+      });
+}
+
+VoidFuture storage::copy_from_async(storage &source_storage) {
   VoidFuture future;
   device_.fiber().scheduler().AppendCommandBuffer(
       device_, TransactionType::TRANSFER, [&](Account &account) {

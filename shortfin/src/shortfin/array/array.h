@@ -123,11 +123,21 @@ class SHORTFIN_API device_array
 
   // Performs either a d2h, h2d or d2d transfer from a source storage to this
   // storage. Equivalent to calling the same on the backing storage.
-  local::VoidFuture copy_from(device_array &source_array) {
-    return storage_.copy_from(source_array.storage_);
+  void copy_from(device_array &source_array) {
+    storage_.copy_from(source_array.storage_);
   }
   // Inverse of copy_from.
-  local::VoidFuture copy_to(device_array &dest_array) {
+  void copy_to(device_array &dest_array) {
+    dest_array.storage_.copy_from(storage_);
+  }
+
+  // Performs either a d2h, h2d or d2d async transfer from a source storage to this
+  // storage. Equivalent to calling the same on the backing storage.
+  local::VoidFuture copy_from_async(device_array &source_array) {
+    return storage_.copy_from(source_array.storage_);
+  }
+  // Inverse of async copy_from.
+  local::VoidFuture copy_to_async(device_array &dest_array) {
     return dest_array.storage_.copy_from(storage_);
   }
 
