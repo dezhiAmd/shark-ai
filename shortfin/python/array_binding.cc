@@ -478,7 +478,7 @@ void BindArray(py::module_ &m) {
       .def(
           "copy_from", [](storage &self, storage &src) { self.copy_from(src); },
           py::arg("source_storage"), DOCSTRING_STORAGE_COPY_FROM)
-
+      .def(
           "copy_from_async",
           [](storage &self, storage &src) {
             auto res = self.copy_from_async(src);
