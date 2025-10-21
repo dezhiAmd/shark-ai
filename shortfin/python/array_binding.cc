@@ -108,6 +108,13 @@ via array.array into its contents.
 static const char DOCSTRING_STORAGE_COPY_FROM[] =
     R"(Copy contents from a source storage to this array.
 
+This operation executes synchronously and the effect will only be visible
+once the execution fiber has been synced to the point of mutation.
+)";
+
+static const char DOCSTRING_STORAGE_COPY_FROM_ASYNC[] =
+    R"(Copy contents from a source storage to this array async.
+
 This operation executes asynchronously and the effect will only be visible
 once the execution fiber has been synced to the point of mutation.
 )";
