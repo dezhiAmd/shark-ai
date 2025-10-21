@@ -477,6 +477,7 @@ void BindArray(py::module_ &m) {
           py::arg("pattern"), DOCSTRING_STORAGE_FILL)
       .def(
           "copy_from", [](storage &self, storage &src) { self.copy_from(src); },
+          py::arg("source_storage"), DOCSTRING_STORAGE_COPY_FROM)
 
           "copy_from_async",
           [](storage &self, storage &src) {
@@ -484,7 +485,7 @@ void BindArray(py::module_ &m) {
             py::object future = py::cast(res, py::rv_policy::move);
             return future;
           },
-          py::arg("source_storage"), DOCSTRING_STORAGE_COPY_FROM)
+          py::arg("source_storage"), DOCSTRING_STORAGE_COPY_FROM_ASYNC)
       .def(
           "map",
           [](storage &self, bool read, bool write, bool discard) {
