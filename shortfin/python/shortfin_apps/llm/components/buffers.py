@@ -64,6 +64,7 @@ async def copy_buffers_to_host(
     Returns:
         List[sfnp.device_array]: A list of host buffers corresponding to the input device buffers.
     """
+    tasks = []
     new_buffers = []
     for buffer in buffers:
         if buffer is None:
@@ -71,8 +72,7 @@ async def copy_buffers_to_host(
             continue
 
         host_buffer = buffer.for_transfer()
-        host_buffer.copy_from(buffer)
+        tasks.append(host_buffer.copy_from_async(buffer))
         new_buffers.append(host_buffer)
-
-    await device
+    await asyncio.gather(*tasks)
     return new_buffers
